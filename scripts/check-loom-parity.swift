@@ -17,6 +17,7 @@ struct LoomParityChecks {
         checkCameraFilter()
         checkPen()
         checkProgress()
+        checkFrameSampler()
         print("loom parity checks passed")
     }
 
@@ -184,6 +185,32 @@ struct LoomParityChecks {
         precondition(Set(ids).count == ids.count, "two actions share a hot key id")
         let sessionOnly = CaptureHotkeyAction.allCases.filter(\.isSessionOnly)
         precondition(sessionOnly == [.pauseResume, .stopRecording], "session-only actions are \(sessionOnly)")
+    }
+
+    /// Stills for Claude Code: scene changes, a floor of one per 10 s, clicks.
+    static func checkFrameSampler() {
+        let still = [UInt8](repeating: 100, count: 32 * 18)
+        func moved(_ cells: Int) -> [UInt8] {
+            var luma = still
+            for i in 0..<cells { luma[i] = 200 }
+            return luma
+        }
+        let times = (0..<60).map { Double($0) * 0.5 }
+        let quiet = pickFrames(times.map { Thumb(t: $0, luma: still) })
+        precondition(quiet.map(\.t) == [0, 10, 20], "a still video gave \(quiet.map(\.t))")
+
+        let scene = pickFrames(times.map { Thumb(t: $0, luma: $0 >= 7 ? moved(20) : still) })
+        precondition(scene.map(\.t) == [0, 7, 17, 27], "a scene change at 7 s gave \(scene.map(\.t))")
+        let flicker = pickFrames(times.map { Thumb(t: $0, luma: $0 >= 7 ? moved(5) : still) })
+        precondition(flicker.map(\.t) == [0, 10, 20], "5 changed cells counted as a scene: \(flicker.map(\.t))")
+
+        let clicked = pickFrames(times.map { Thumb(t: $0, luma: still) }, clicks: [3.0])
+        precondition(clicked.contains { $0.t == 3.25 && $0.click == 1 }, "click frame missing: \(clicked)")
+
+        let busy = (0..<1000).map { Thumb(t: Double($0) * 0.5, luma: $0.isMultiple(of: 2) ? still : moved(100)) }
+        let cappedFrames = pickFrames(busy, clicks: (0..<50).map { Double($0) * 9 + 0.1 })
+        precondition(cappedFrames.count <= 400, "\(cappedFrames.count) frames is over the cap")
+        precondition(cappedFrames.filter { $0.click != nil }.count == 50, "the cap dropped clicks")
     }
 
     /// The share page's bar: render then upload, at most one report per 2 s.

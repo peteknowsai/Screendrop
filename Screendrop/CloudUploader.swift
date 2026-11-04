@@ -226,6 +226,8 @@ final class CloudUploader: NSObject {
             uploadedURLs[itemID] = result.url
             if isVideo {
                 scheduleSidecarUpload(uploadID: result.id, fileURL: fileURL, title: title, creds: creds)
+            } else {
+                scheduleSearchText(uploadID: result.id, fileURL: fileURL, creds: creds)
             }
             return result
         } catch is CancellationError {
@@ -262,6 +264,17 @@ final class CloudUploader: NSObject {
                 customTitle: title,
                 creds: creds
             )
+        }
+    }
+
+    /// A screenshot's text, when the Library has already read it; the
+    /// Library sends it itself when it reads the screenshot later.
+    private func scheduleSearchText(uploadID: String, fileURL: URL, creds: CloudCredentials) {
+        let standardized = fileURL.standardizedFileURL
+        guard let item = ScreenshotHistoryStore.shared.items.first(where: { $0.url.standardizedFileURL == standardized }),
+              let text = CaptureLibraryIndex.shared.analyses[item.id.uuidString]?.text, !text.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            await CloudSidecarUploader.uploadSearchText(uploadID: uploadID, text: text, creds: creds)
         }
     }
 

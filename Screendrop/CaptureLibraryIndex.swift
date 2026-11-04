@@ -181,6 +181,7 @@ final class CaptureLibraryIndex {
             if let result = await work.value {
                 await store.save(result.analysis, featurePrint: result.featurePrint)
                 unpublished[item.id] = result.analysis
+                if isReading { sendSearchText(result.analysis.text, for: item) }
                 schedulePublish()
                 // A freshly read capture may be due for sorting next.
                 if isReading, result.analysis.classifier != .model, CaptureLibraryAnalyzer.isModelAvailable {
@@ -192,6 +193,18 @@ final class CaptureLibraryIndex {
             updateCounts()
         }
         publish()
+    }
+
+    /// A screenshot already on the cloud gets its text there too, so the
+    /// web library's search and Claude Code can find it.
+    private func sendSearchText(_ text: String, for item: CaptureLibraryItem) {
+        guard !item.isVideo, !text.isEmpty,
+              let cloudID = item.cloudURL.flatMap(URL.init(string:))?.lastPathComponent, !cloudID.isEmpty else { return }
+        let creds = CloudCredentialStore.shared.snapshot()
+        guard creds.isConfigured else { return }
+        Task.detached(priority: .background) {
+            await CloudSidecarUploader.uploadSearchText(uploadID: cloudID, text: text, creds: creds)
+        }
     }
 
     private func isDueForSorting(_ item: CaptureLibraryItem) -> Bool {
