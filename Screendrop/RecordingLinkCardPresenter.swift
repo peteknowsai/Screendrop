@@ -49,7 +49,9 @@ final class RecordingLinkCardModel {
     }
 
     /// History swaps the screen master for the rendered take once it exists;
-    /// the card follows, so Preview and Delete act on what was shared.
+    /// the card follows, so Preview, Edit in Studio and Delete act on what
+    /// was shared. Studio given the stale master opens a bare file that
+    /// doesn't know its link, and Share would make a second one.
     private var currentURL: URL {
         guard let session = RecordingDeliverable.session(for: fileURL) else { return fileURL }
         let path = session.directoryURL.standardizedFileURL.path
@@ -94,7 +96,7 @@ final class RecordingLinkCardModel {
     }
 
     func editInStudio() {
-        CaptureShelfPresenter.shared.onEditVideo?(fileURL)
+        CaptureShelfPresenter.shared.onEditVideo?(currentURL)
     }
 
     func saveToDownloads() {
@@ -253,6 +255,8 @@ private struct LinkCardToast: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Palette.label)
         }
+        // The panel takes its size from fittingSize; without this the text truncates.
+        .fixedSize()
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .glassHUD(radius: 20)

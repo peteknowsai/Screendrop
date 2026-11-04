@@ -265,9 +265,7 @@ struct RecordingPickerControls: View {
         Menu {
             Section("Who can watch") {
                 ForEach(RecordingPrivacyChoice.allCases, id: \.self) { choice in
-                    Button { privacy = choice } label: {
-                        menuSelectionLabel(choice.title, isSelected: privacy == choice)
-                    }
+                    MenuChoice(title: choice.title, isSelected: privacy == choice) { privacy = choice }
                 }
             }
         } label: {
@@ -293,10 +291,8 @@ struct RecordingPickerControls: View {
 
             Menu {
                 ForEach(RecordingWallpaper.Backdrop.allCases) { choice in
-                    Button { backdrop = choice } label: {
-                        if backdrop == choice {
-                            Label(choice.title, systemImage: "checkmark")
-                        } else if let swatch = choice.swatch {
+                    Toggle(isOn: Binding(get: { backdrop == choice }, set: { _ in backdrop = choice })) {
+                        if let swatch = choice.swatch {
                             Label { Text(choice.title) } icon: { Image(nsImage: swatch) }
                         } else {
                             Text(choice.title)
@@ -413,11 +409,9 @@ struct RecordingPickerControls: View {
 
     private var cameraPicker: some View {
         Menu {
-            Button {
+            MenuChoice(title: "None", isSelected: cameraID.isEmpty) {
                 cameraID = ""
                 Task { await CameraRecordingManager.shared.stopPreview() }
-            } label: {
-                menuSelectionLabel("None", isSelected: cameraID.isEmpty)
             }
 
             Divider()
@@ -427,18 +421,14 @@ struct RecordingPickerControls: View {
             }
 
             if FakeCamera.movieURL != nil {
-                Button {
+                MenuChoice(title: FakeCamera.name, isSelected: cameraID == FakeCamera.deviceID) {
                     selectCamera(FakeCamera.deviceID)
-                } label: {
-                    menuSelectionLabel(FakeCamera.name, isSelected: cameraID == FakeCamera.deviceID)
                 }
             }
 
             ForEach(cameras, id: \.uniqueID) { device in
-                Button {
+                MenuChoice(title: device.localizedName, isSelected: cameraID == device.uniqueID) {
                     selectCamera(device.uniqueID)
-                } label: {
-                    menuSelectionLabel(device.localizedName, isSelected: cameraID == device.uniqueID)
                 }
             }
         } label: {
@@ -457,22 +447,15 @@ struct RecordingPickerControls: View {
 
     private var microphonePicker: some View {
         Menu {
-            Button {
+            MenuChoice(title: "None", isSelected: microphoneID.isEmpty) {
                 microphoneID = ""
-            } label: {
-                menuSelectionLabel("None", isSelected: microphoneID.isEmpty)
             }
 
             Divider()
 
             ForEach(RecordingDeviceCatalog.microphones(), id: \.uniqueID) { device in
-                Button {
+                MenuChoice(title: device.localizedName, isSelected: microphoneID == device.uniqueID) {
                     selectMicrophone(device.uniqueID)
-                } label: {
-                    menuSelectionLabel(
-                        device.localizedName,
-                        isSelected: microphoneID == device.uniqueID
-                    )
                 }
             }
         } label: {
@@ -500,15 +483,6 @@ struct RecordingPickerControls: View {
         .buttonStyle(BarButtonStyle())
         .menuIndicator(.hidden)
         .accessibilityLabel(microphoneAccessibilityLabel)
-    }
-
-    @ViewBuilder
-    private func menuSelectionLabel(_ title: String, isSelected: Bool) -> some View {
-        if isSelected {
-            Label(title, systemImage: "checkmark")
-        } else {
-            Text(title)
-        }
     }
 
     private func selectCamera(_ deviceID: String?) {
@@ -558,5 +532,18 @@ private extension RecordingWallpaper.Backdrop {
             path.stroke()
             return true
         }
+    }
+}
+
+/// A menu item marked with the menu's own checkmark when it is the current
+/// choice. A checkmark drawn as a Label icon never shows: macOS menus drop
+/// SwiftUI icons unless the menu asks for them.
+struct MenuChoice: View {
+    let title: String
+    let isSelected: Bool
+    let select: () -> Void
+
+    var body: some View {
+        Toggle(title, isOn: Binding(get: { isSelected }, set: { _ in select() }))
     }
 }

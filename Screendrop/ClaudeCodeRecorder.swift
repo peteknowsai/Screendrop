@@ -265,6 +265,8 @@ private struct AgentChip: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Palette.label)
         }
+        // The panel takes its size from fittingSize; without this the text truncates.
+        .fixedSize()
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .glassHUD(radius: 18)
@@ -294,6 +296,7 @@ private struct PinnedBox: View {
     var body: some View {
         Text("Pinned: \(label)")
             .font(.system(size: 12, weight: .semibold))
+            .fixedSize()
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 5)

@@ -33,6 +33,9 @@ final class PointPinPresenter {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
+        // A clear window lets clicks through its empty pixels unless told
+        // otherwise, and then the click lands in the app underneath.
+        panel.ignoresMouseEvents = false
         panel.level = NSWindow.Level(rawValue: NSWindow.Level.floating.rawValue - 1)
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         let view = ClickCatcherView(frame: CGRect(origin: .zero, size: screen.frame.size))
@@ -128,6 +131,8 @@ private struct PinLabelField: View {
         .padding(.vertical, 9)
         .glassHUD(radius: 14)
         .padding(12)
-        .onAppear { focused = true }
+        // onAppear runs before the panel is key, when focus can't land;
+        // a turn later it can, so typing goes straight into the label.
+        .onAppear { DispatchQueue.main.async { focused = true } }
     }
 }

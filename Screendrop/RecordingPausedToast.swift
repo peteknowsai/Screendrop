@@ -65,6 +65,8 @@ private struct PausedToastView: View {
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Palette.label)
         }
+        // The panel takes its size from fittingSize; without this the text truncates.
+        .fixedSize()
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .glassHUD(radius: 20)

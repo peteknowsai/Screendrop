@@ -147,14 +147,8 @@ struct RecordingLinkCard: View {
     private var privacyMenu: some View {
         Menu {
             ForEach(RecordingPrivacyChoice.allCases, id: \.self) { choice in
-                Button {
+                MenuChoice(title: choice.title, isSelected: choice == model.privacy) {
                     model.setPrivacy(choice)
-                } label: {
-                    if choice == model.privacy {
-                        Label(choice.title, systemImage: "checkmark")
-                    } else {
-                        Text(choice.title)
-                    }
                 }
             }
         } label: {
