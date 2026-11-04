@@ -140,7 +140,6 @@ struct CaptureLibraryView: View {
             AppActivationPolicy.enter()
             CaptureLibraryIndex.shared.start()
             model.windowDidOpen()
-            UpdaterManager.shared.checkForUpdateInformation()
             model.sortOrder = savedSort
             model.refresh()
         }
@@ -466,9 +465,8 @@ private struct LibrarySortOffer: View {
     }
 }
 
-/// Settings, plus a blue download button while a newer release is waiting.
+/// The Settings button at the foot of the sidebar.
 private struct LibrarySidebarFooter: View {
-    @ObservedObject private var updater = UpdaterManager.shared
     @State private var isHovering = false
 
     var body: some View {
@@ -496,21 +494,8 @@ private struct LibrarySidebarFooter: View {
             .buttonStyle(.plain)
             .onHover { isHovering = $0 }
             .help("Settings (⌘,)")
-
-            if let version = updater.availableUpdateVersion {
-                GlassIconButton(
-                    systemImage: "arrow.down",
-                    help: "Download Screendrop \(version)",
-                    size: 30,
-                    tint: .blue
-                ) {
-                    updater.checkForUpdates()
-                }
-                .transition(.blurPop)
-            }
         }
         .motion(.morphQuick, value: isHovering)
-        .motion(.morph, value: updater.availableUpdateVersion)
         .padding(.horizontal, 10)
         .padding(.bottom, 10)
     }

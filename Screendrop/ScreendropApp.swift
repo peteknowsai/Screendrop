@@ -131,7 +131,6 @@ struct ScreendropApp: App {
 // MARK: - App Delegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let updaterManager = UpdaterManager.shared
     private var openedFilesAtLaunch = false
 
     /// Files handed to us via Finder's "Open With" (or `open -a Screendrop`)
@@ -161,7 +160,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if RecordingExportBenchmark.runIfRequested() { return }
         #endif
         HotkeyManager.shared.registerHotkeys()
-        updaterManager.start()
         AgentServer.shared.updateForPreference()
         RecordingRecoveryCoordinator.recoverInterruptedRecordings()
         // Indexing is background work; let launch settle first.

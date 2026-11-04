@@ -21,6 +21,10 @@ enum RecordingSessionRenderer {
         }
     }
 
+    /// Flattens in progress, so an upload and a Share that ask for the same
+    /// edits wait on one export instead of encoding the movie twice.
+    private static var inFlight: [String: Task<URL, Error>] = [:]
+
     /// Creates a flattened deliverable when explicitly requested for a session
     /// whose raw screen master would not match what the user sees: a camera
     /// source, a cursor-hidden capture, or any saved Studio project. Only a
@@ -40,6 +44,25 @@ enum RecordingSessionRenderer {
         }
         if let existing = session.freshFinalURL(matching: editDocument) { return existing }
 
+        // The stamp is the edit document itself, so a caller after an edit
+        // never joins a render of the older edits.
+        let stamp = editDocument
+            .flatMap { try? CaptureManifest.encoder.encode($0) }
+            .map { String(decoding: $0, as: UTF8.self) } ?? "none"
+        let key = RecordingRenderKey.key(sessionPath: session.directoryURL.path, documentStamp: stamp)
+        // ponytail: a caller that joins gets no progress; only the first does.
+        if let running = inFlight[key] { return try await running.value }
+        let task = Task { try await render(session, from: editDocument, onProgress: onProgress) }
+        inFlight[key] = task
+        defer { inFlight[key] = nil }
+        return try await task.value
+    }
+
+    private static func render(
+        _ session: RecordingSession,
+        from editDocument: RecordingEditDocument?,
+        onProgress: (@Sendable (Double) -> Void)?
+    ) async throws -> URL {
         let configuration = try await makeConfiguration(for: session)
         let temporaryURL = try await RecordingStudioExporter().export(configuration) { progress in
             onProgress?(progress)
