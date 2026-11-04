@@ -432,6 +432,8 @@ private struct MiniatureGeometry {
     private func cornerCamera(for layout: RecordingCameraLayout) -> (rect: CGRect, radius: CGFloat) {
         let size: CGSize = if layout.shape == .portrait {
             CGSize(width: (unit * 0.32).rounded(), height: (unit * 0.32 * 4 / 3).rounded())
+        } else if layout.shape == .landscape {
+            CGSize(width: (unit * 0.45).rounded(), height: (unit * 0.3).rounded())
         } else {
             CGSize(width: (unit * 0.4).rounded(), height: (unit * 0.4).rounded())
         }
@@ -825,6 +827,7 @@ extension RecordingCameraLayout.Shape {
         case .circle: "Circle"
         case .square: "Square"
         case .portrait: "Portrait"
+        case .landscape: "Landscape"
         }
     }
 
@@ -833,6 +836,7 @@ extension RecordingCameraLayout.Shape {
         case .circle: "circle"
         case .square: "square"
         case .portrait: "rectangle.portrait"
+        case .landscape: "rectangle"
         }
     }
 }

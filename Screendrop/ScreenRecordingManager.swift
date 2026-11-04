@@ -333,6 +333,7 @@ final class ScreenRecordingManager {
         state = .paused
         updateElapsedTime()
         RecordingPausedToast.shared.show(displayID: displayID)
+        CameraBubblePanel.shared.isPaused = true
     }
 
     func resumeRecording() {
@@ -351,6 +352,7 @@ final class ScreenRecordingManager {
         state = .recording
         updateElapsedTime()
         RecordingPausedToast.shared.hide()
+        CameraBubblePanel.shared.isPaused = false
     }
 
     func restartRecording() {
@@ -578,7 +580,7 @@ final class ScreenRecordingManager {
             }
         }
 
-        if let cameraID = requested.cameraDeviceID {
+        if let cameraID = requested.cameraDeviceID, !FakeCamera.isFake(cameraID) {
             if RecordingDeviceCatalog.camera(withID: cameraID) == nil {
                 resolved.cameraDeviceID = nil
                 ScreendropPreferences.recordingCameraDeviceID = ""
@@ -684,6 +686,18 @@ final class ScreenRecordingManager {
         }
     }
 
+    /// Seconds into the take with pauses taken out, the clock the camera's
+    /// bubble intervals and the render share. Nil outside a take.
+    var recordingClock: TimeInterval? {
+        guard let startedAt else { return nil }
+        let pauseDuration = if state == .paused, let pausedAt {
+            accumulatedPauseDuration + Date().timeIntervalSince(pausedAt)
+        } else {
+            accumulatedPauseDuration
+        }
+        return max(0, Date().timeIntervalSince(startedAt) - pauseDuration)
+    }
+
     private func updateElapsedTime() {
         guard let startedAt else {
             elapsedTime = 0
@@ -711,6 +725,7 @@ final class ScreenRecordingManager {
         keystrokeRecorder.stop()
         TeleprompterController.shared.endRecordingSession()
         RecordingPausedToast.shared.hide()
+        CameraBubblePanel.shared.isPaused = false
         endActivity()
         if finishAction != .restart {
             RecordingWallpaper.restore()

@@ -11,7 +11,45 @@ struct LoomParityChecks {
         checkPrivacyChoice()
         checkWallpaper()
         checkInlineConfirm()
+        checkBubble()
         print("loom parity checks passed")
+    }
+
+    /// The bubble snaps by quadrant, keeps its long side, and maps onto the
+    /// render's camera at the size you saw it.
+    static func checkBubble() {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        precondition(snapCorner(center: CGPoint(x: 200, y: 800), in: screen) == .topLeading)
+        precondition(snapCorner(center: CGPoint(x: 1300, y: 100), in: screen) == .bottomTrailing)
+
+        let defaults = BubbleState()
+        precondition(defaults.shape == .roundedSquare && defaults.size == .m && defaults.corner == .bottomLeading)
+        precondition(BubbleState.stored(in: emptyDefaults()) == defaults)
+
+        let circle = cameraPlacement(for: BubbleState(shape: .circle, size: .m), captureSizeInPoints: CGSize(width: 1440, height: 900))
+        precondition(!circle.fillsFrame && circle.shape == .circle && abs(circle.size - 0.2) < 0.0001, "\(circle)")
+        precondition(cameraPlacement(for: BubbleState(shape: .landscape), captureSizeInPoints: screen.size).shape == .landscape)
+        precondition(cameraPlacement(for: BubbleState(isFull: true), captureSizeInPoints: screen.size).fillsFrame)
+        let tiny = cameraPlacement(for: BubbleState(size: .xs), captureSizeInPoints: CGSize(width: 3840, height: 2160))
+        precondition(abs(tiny.size - 0.12) < 0.0001, "xs on 4K should clamp to 0.12, got \(tiny.size)")
+
+        let saved = BubbleState(shape: .portrait, size: .xl, corner: .topTrailing, isHidden: true, isFull: false)
+        let data = try! JSONEncoder().encode(saved)
+        precondition(try! JSONDecoder().decode(BubbleState.self, from: data) == saved)
+        let odd = #"{"shape":"hexagon","size":4,"corner":"topTrailing"}"#.data(using: .utf8)!
+        let decoded = try! JSONDecoder().decode(BubbleState.self, from: odd)
+        precondition(decoded.shape == .roundedSquare && decoded.size == .xl && decoded.corner == .topTrailing)
+
+        let suite = emptyDefaults()
+        saved.save(in: suite)
+        let relaunched = BubbleState.stored(in: suite)
+        precondition(relaunched.shape == .portrait && relaunched.size == .xl, "shape and size should persist")
+        precondition(!relaunched.isHidden && !relaunched.isFull, "camera-off and full screen should not persist")
+
+        let portrait = bubbleFrame(state: BubbleState(shape: .portrait, size: .m), in: screen)
+        precondition(portrait.height == 180 && portrait.width == 135, "\(portrait)")
+        precondition(portrait.minX == 36 && portrait.minY == 36, "bottom-left with a 36 pt margin, got \(portrait)")
+        precondition(bubbleFrame(state: BubbleState(isFull: true), in: screen) == screen)
     }
 
     /// Restart and delete act on the second tap inside three seconds only.

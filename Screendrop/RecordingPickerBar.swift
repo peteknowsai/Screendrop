@@ -365,6 +365,7 @@ struct RecordingPickerControls: View {
 
     private var cameraTooltip: String {
         guard !cameraID.isEmpty else { return "Camera off" }
+        if FakeCamera.isFake(cameraID) { return "Camera: \(FakeCamera.name)" }
         guard let camera = cameras.first(where: { $0.uniqueID == cameraID }) else { return "Camera unavailable" }
         return "Camera: \(camera.localizedName)"
     }
@@ -373,6 +374,7 @@ struct RecordingPickerControls: View {
         guard !cameraID.isEmpty else {
             return "Camera off - click to choose a camera"
         }
+        if FakeCamera.isFake(cameraID) { return "Camera on - \(FakeCamera.name), click to switch" }
         guard let camera = cameras.first(where: { $0.uniqueID == cameraID }) else {
             return "Camera unavailable - click to choose another camera"
         }
@@ -411,8 +413,16 @@ struct RecordingPickerControls: View {
 
             Divider()
 
-            if cameras.isEmpty {
+            if cameras.isEmpty && FakeCamera.movieURL == nil {
                 Text("No cameras available")
+            }
+
+            if FakeCamera.movieURL != nil {
+                Button {
+                    selectCamera(FakeCamera.deviceID)
+                } label: {
+                    menuSelectionLabel(FakeCamera.name, isSelected: cameraID == FakeCamera.deviceID)
+                }
             }
 
             ForEach(cameras, id: \.uniqueID) { device in
@@ -495,7 +505,9 @@ struct RecordingPickerControls: View {
     private func selectCamera(_ deviceID: String?) {
         guard let deviceID else { return }
         Task { @MainActor in
-            let authorized = await RecordingInputAuthorization.ensureAccess(for: .camera)
+            let authorized = FakeCamera.isFake(deviceID)
+                ? true
+                : await RecordingInputAuthorization.ensureAccess(for: .camera)
             cameraID = authorized ? deviceID : ""
             if authorized {
                 await warmCameraPreview()
