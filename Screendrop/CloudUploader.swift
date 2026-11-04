@@ -323,7 +323,7 @@ final class CloudUploader: NSObject {
 
     // MARK: - Helpers
 
-    nonisolated private static func normalizeWorkerURL(_ raw: String) -> String {
+    nonisolated static func normalizeWorkerURL(_ raw: String) -> String {
         let trimmed = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))

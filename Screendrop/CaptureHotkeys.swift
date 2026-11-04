@@ -146,12 +146,21 @@ struct HotkeyShortcut: Codable, Equatable, Hashable {
     }
 }
 
+/// What each global shortcut does lives in CaptureHotkeyAction+Perform.swift,
+/// so this file stays free of app singletons and the checks can compile it.
 enum CaptureHotkeyAction: String, CaseIterable, Identifiable {
     case fullscreen
     case window
     case area
     case screenRecording
     case textCapture
+    case recordDisplay
+    case recordWindow
+    case recordArea
+    case recordCameraOnly
+    case recordForClaude
+    case pauseResume
+    case stopRecording
 
     var id: Self { self }
 
@@ -162,6 +171,13 @@ enum CaptureHotkeyAction: String, CaseIterable, Identifiable {
         case .area: 3
         case .screenRecording: 4
         case .textCapture: 5
+        case .recordDisplay: 6
+        case .recordWindow: 7
+        case .recordArea: 8
+        case .recordCameraOnly: 9
+        case .recordForClaude: 10
+        case .pauseResume: 11
+        case .stopRecording: 12
         }
     }
 
@@ -172,37 +188,42 @@ enum CaptureHotkeyAction: String, CaseIterable, Identifiable {
         case .area: "Area"
         case .screenRecording: "Screen Recording"
         case .textCapture: "Capture Text"
+        case .recordDisplay: "Record Display"
+        case .recordWindow: "Record Window"
+        case .recordArea: "Record Custom Size"
+        case .recordCameraOnly: "Record Camera Only"
+        case .recordForClaude: "Record for Claude Code"
+        case .pauseResume: "Pause or Resume"
+        case .stopRecording: "Stop Recording"
         }
     }
 
     var defaultShortcut: HotkeyShortcut {
         switch self {
-        case .fullscreen:
-            HotkeyShortcut(modifiers: [.option], keyCode: Int(kVK_ANSI_1))
-        case .window:
-            HotkeyShortcut(modifiers: [.option], keyCode: Int(kVK_ANSI_2))
-        case .area:
-            HotkeyShortcut(modifiers: [.option], keyCode: Int(kVK_ANSI_3))
-        case .screenRecording:
-            HotkeyShortcut(modifiers: [.option], keyCode: Int(kVK_ANSI_4))
-        case .textCapture:
-            HotkeyShortcut(modifiers: [.option], keyCode: Int(kVK_ANSI_5))
+        case .fullscreen: HotkeyShortcut(modifiers: [.option], keyCode: kVK_ANSI_1)
+        case .window: HotkeyShortcut(modifiers: [.option], keyCode: kVK_ANSI_2)
+        case .area: HotkeyShortcut(modifiers: [.option], keyCode: kVK_ANSI_3)
+        case .screenRecording: HotkeyShortcut(modifiers: [.option], keyCode: kVK_ANSI_4)
+        case .textCapture: HotkeyShortcut(modifiers: [.option], keyCode: kVK_ANSI_5)
+        case .recordDisplay: HotkeyShortcut(modifiers: [.option, .shift], keyCode: kVK_ANSI_1)
+        case .recordWindow: HotkeyShortcut(modifiers: [.option, .shift], keyCode: kVK_ANSI_2)
+        case .recordArea: HotkeyShortcut(modifiers: [.option, .shift], keyCode: kVK_ANSI_3)
+        case .recordCameraOnly: HotkeyShortcut(modifiers: [.option, .shift], keyCode: kVK_ANSI_4)
+        case .recordForClaude: HotkeyShortcut(modifiers: [.option, .shift], keyCode: kVK_ANSI_5)
+        case .pauseResume: HotkeyShortcut(modifiers: [.control, .option], keyCode: kVK_ANSI_R)
+        case .stopRecording: HotkeyShortcut(modifiers: [.command, .control], keyCode: kVK_ANSI_C)
         }
     }
 
+    /// Pause and stop only exist while a recording runs, so ⌘⌃C belongs to
+    /// every other app the rest of the time.
+    var isSessionOnly: Bool {
+        self == .pauseResume || self == .stopRecording
+    }
+
+    /// "captureHotkey.fullscreen" and so on: the keys the first five always used.
     var preferencesKey: String {
-        switch self {
-        case .fullscreen:
-            ScreendropPreferences.fullscreenHotkeyKey
-        case .window:
-            ScreendropPreferences.windowHotkeyKey
-        case .area:
-            ScreendropPreferences.areaHotkeyKey
-        case .screenRecording:
-            ScreendropPreferences.screenRecordingHotkeyKey
-        case .textCapture:
-            ScreendropPreferences.textCaptureHotkeyKey
-        }
+        "captureHotkey.\(rawValue)"
     }
 
     init?(hotKeyID: UInt32) {
@@ -211,23 +232,6 @@ enum CaptureHotkeyAction: String, CaseIterable, Identifiable {
         }
 
         self = action
-    }
-
-    func perform() {
-        switch self {
-        case .fullscreen:
-            CaptureCoordinator.shared.captureFullscreen()
-        case .window:
-            CaptureCoordinator.shared.captureWindow()
-        case .area:
-            CaptureCoordinator.shared.captureArea()
-        case .screenRecording:
-            Task { @MainActor in
-                RecordingPickerPresenter.shared.toggle()
-            }
-        case .textCapture:
-            CaptureCoordinator.shared.captureText()
-        }
     }
 }
 

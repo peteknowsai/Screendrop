@@ -127,6 +127,9 @@ final class ScreenRecordingManager {
     static let shared = ScreenRecordingManager()
 
     var state: ScreenRecordingState = .idle
+    /// What the next or current recording is for, set by the entry point
+    /// that opened the recorder. Back to `.screen` once a recording ends.
+    var sourceIntent: RecordingSourceIntent = .screen
     var elapsedTime: TimeInterval = 0
     var errorMessage: String?
     var onFinishRecording: ((RecordingSession, CGDirectDisplayID?) -> Void)?
@@ -288,6 +291,7 @@ final class ScreenRecordingManager {
                 accumulatedPauseDuration = 0
                 elapsedTime = 0
                 state = .recording
+                HotkeyManager.shared.registerSessionHotkeys()
                 beginActivity()
                 startTimer()
             } catch {
@@ -696,7 +700,9 @@ final class ScreenRecordingManager {
         accumulatedPauseDuration = 0
         finishAction = .preview
         isStopping = false
+        sourceIntent = .screen
         state = .idle
+        HotkeyManager.shared.unregisterSessionHotkeys()
     }
 
     private static func captureTarget(

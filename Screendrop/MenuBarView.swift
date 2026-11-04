@@ -6,82 +6,61 @@
 //
 
 import AppKit
-import AVFoundation
-import ScreenCaptureKit
 import SwiftUI
 
+/// Loom's menu: record first, then screenshots, then where things went.
 struct MenuBarView: View {
     @State private var historyStore = ScreenshotHistoryStore.shared
-    @State private var projectStore = RecordingProjectStore.shared
 
     var body: some View {
         Group {
-            Button {
-                CaptureCoordinator.shared.captureFullscreen()
-            } label: {
-                Label("Capture Fullscreen", systemImage: "macwindow")
-            }
-            
-            Button {
-                CaptureCoordinator.shared.captureWindow()
-            } label: {
-                Label("Capture Window", systemImage: "macwindow.on.rectangle")
-            }
-            
-            Button {
-                CaptureCoordinator.shared.captureArea()
-            } label: {
-                Label("Capture Area", systemImage: "rectangle.dashed")
+            Section("Videos") {
+                item("Record Display", "display", .recordDisplay) { CaptureCoordinator.shared.recordDisplay() }
+                item("Record Window", "macwindow", .recordWindow) { CaptureCoordinator.shared.recordWindow() }
+                item("Record Custom Size", "rectangle.dashed", .recordArea) { CaptureCoordinator.shared.recordCustomSize() }
+                item("Record Camera Only", "person.crop.square", .recordCameraOnly) { CaptureCoordinator.shared.recordCameraOnly() }
             }
 
-            Button {
-                CaptureCoordinator.shared.captureText()
-            } label: {
-                Label("Capture Text", systemImage: "text.viewfinder")
+            Section("Claude Code") {
+                item("Record for Claude Code", "apple.terminal", .recordForClaude) { CaptureCoordinator.shared.recordForClaude() }
             }
 
-            Button {
-                RecordingPickerPresenter.shared.show()
-            } label: {
-                Label("Record Screen", systemImage: "record.circle")
+            Section("Screenshots") {
+                item("Capture Area", "viewfinder", .area) { CaptureCoordinator.shared.captureArea() }
+                item("Capture Window", "macwindow.on.rectangle", .window) { CaptureCoordinator.shared.captureWindow() }
+                item("Capture Display", "display", .fullscreen) { CaptureCoordinator.shared.captureFullscreen() }
+                item("Grab Text", "text.viewfinder", .textCapture) { CaptureCoordinator.shared.captureText() }
             }
 
             Divider()
+
+            Button {
+                CloudLibraryLink.open()
+            } label: {
+                Label("My Library", systemImage: "books.vertical")
+            }
 
             Button {
                 CaptureLibraryModel.shared.show()
             } label: {
-                Label("Open Library", systemImage: "square.grid.2x2")
-            }
-            .keyboardShortcut("l", modifiers: [.command, .shift])
-
-            Menu {
-                projectsMenuContent
-            } label: {
-                Label("Recordings", systemImage: "film.stack")
+                Label("Local Captures", systemImage: "photo.on.rectangle")
             }
 
             Menu {
-                historyMenuContent
+                uploadsMenuContent
             } label: {
-                Label("Recent Captures", systemImage: "clock.arrow.circlepath")
+                Label("Uploads", systemImage: "icloud.and.arrow.up")
             }
 
+            Divider()
+
             Button {
-                openScreenshotsFolder()
+                SettingsWindowController.show(tab: .general)
             } label: {
-                Label("Open Screenshots Folder", systemImage: "folder")
-            }
-            
-            Button {
-                openSettings(tab: .general)
-            } label: {
-                Label("Settings", systemImage: "gearshape")
+                Label("Settings…", systemImage: "gearshape")
             }
             .keyboardShortcut(",", modifiers: [.command])
 
-            Divider()
-            
             Button("Quit Screendrop") {
                 NSApplication.shared.terminate(nil)
             }
@@ -89,121 +68,67 @@ struct MenuBarView: View {
         }
         .task {
             historyStore.reload()
-            projectStore.reload()
         }
     }
 
-    /// Reopening a recording is the common case after the first edit, so the
-    /// recents land here rather than behind Settings.
+    /// A menu row showing the global shortcut the user has bound to `action`.
+    private func item(
+        _ title: String,
+        _ systemImage: String,
+        _ action: CaptureHotkeyAction,
+        perform: @escaping () -> Void
+    ) -> some View {
+        Button(action: perform) {
+            Label(title, systemImage: systemImage)
+        }
+        .keyboardShortcut(CaptureHotkeyPreferences.shortcut(for: action).menuShortcut)
+    }
+
+    /// The newest links, so pasting one again is one click away.
     @ViewBuilder
-    private var projectsMenuContent: some View {
-        if projectStore.projects.isEmpty {
-            Text("No recordings")
+    private var uploadsMenuContent: some View {
+        let uploads = historyStore.items
+            .filter { $0.cloudURL != nil }
+            .sorted { $0.createdAt > $1.createdAt }
+            .prefix(8)
+        if uploads.isEmpty {
+            Text("No uploads yet")
         } else {
-            ForEach(projectStore.recentProjects) { project in
-                Button(projectMenuTitle(for: project)) {
-                    RecordingProjectOpener.shared.open(project.session)
+            ForEach(Array(uploads)) { item in
+                Button(uploadTitle(for: item)) {
+                    guard let link = item.cloudURL else { return }
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(link, forType: .string)
                 }
             }
-
             Divider()
         }
 
-        Button {
-            CaptureLibraryModel.shared.show(filter: .recordings)
-        } label: {
-            Label("Show All Recordings…", systemImage: "square.grid.2x2")
+        Button("Show All") {
+            CloudLibraryLink.open()
         }
     }
 
-    private func projectMenuTitle(for project: RecordingProjectSummary) -> String {
-        let name = truncatedMenuTitle(project.displayName)
-        return project.hasUnsavedDraft ? "\(name) - Unsaved" : name
-    }
-
-    @ViewBuilder
-    private var historyMenuContent: some View {
-        if historyStore.recentItems.isEmpty {
-            Text("No captures")
-        } else {
-            ForEach(historyStore.recentItems) { item in
-                Button(historyMenuTitle(for: item)) {
-                    showHistoryPreview(item)
-                }
-            }
-
-            Divider()
-        }
-
-        Button {
-            CaptureLibraryModel.shared.show(filter: .all)
-        } label: {
-            Label("Show All Captures…", systemImage: "rectangle.stack")
-        }
-    }
-
-    private func showHistoryPreview(_ item: ScreenshotHistoryItem) {
-        if item.isVideo {
-            CaptureShelf.shared.show(existing: item.url, kind: .video)
-        } else {
-            CaptureShelf.shared.show(existing: item.url, kind: .image)
-        }
-        CaptureShelfPresenter.shared.show(displayID: ActiveDisplayResolver.activeDisplayID(preferPointer: false))
-    }
-
-    private func openSettings(tab: SettingsTab) {
-        SettingsWindowController.show(tab: tab)
-    }
-
-    private func openScreenshotsFolder() {
-        let directory = ScreendropPreferences.exportDirectory
-
-        do {
-            try FileManager.default.createDirectory(
-                at: directory,
-                withIntermediateDirectories: true
-            )
-        } catch {
-            showOpenScreenshotsFolderError(directory: directory, errorDescription: error.localizedDescription)
-            return
-        }
-
-        if !NSWorkspace.shared.open(directory) {
-            showOpenScreenshotsFolderError(directory: directory, errorDescription: nil)
-        }
-    }
-
-    private func showOpenScreenshotsFolderError(directory: URL, errorDescription: String?) {
-        let alert = NSAlert()
-        alert.messageText = "Could not open screenshots folder."
-        alert.informativeText = errorDescription ?? directory.path
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
-        alert.runModal()
-    }
-
-    private func historyMenuTitle(for item: ScreenshotHistoryItem) -> String {
+    private func uploadTitle(for item: ScreenshotHistoryItem) -> String {
         let name = item.displayName ?? item.fileName
-        let limit = 30
-
-        guard name.count > limit else {
-            return name
-        }
-
-        let url = URL(fileURLWithPath: name)
-        let pathExtension = url.pathExtension
-        let suffix = pathExtension.isEmpty ? "" : ".\(pathExtension)"
-        let baseName = url.deletingPathExtension().lastPathComponent
-        let allowedBaseLength = max(8, limit - suffix.count - 3)
-
-        return "\(baseName.prefix(allowedBaseLength))…\(suffix)"
+        let shortName = name.count > 34 ? "\(name.prefix(33))…" : name
+        let age = RelativeDateTimeFormatter().localizedString(for: item.createdAt, relativeTo: Date())
+        return "\(shortName) · \(age)"
     }
+}
 
-    /// Menus get unusably wide with full session names, which carry a
-    /// timestamp and a uniquing suffix.
-    private func truncatedMenuTitle(_ name: String) -> String {
-        let limit = 34
-        guard name.count > limit else { return name }
-        return "\(name.prefix(limit - 1))…"
+private extension HotkeyShortcut {
+    /// The menu's key hint for this shortcut; nil for keys a menu can't show.
+    var menuShortcut: KeyboardShortcut? {
+        guard let label = displayTokens.last, label.count == 1,
+              let character = label.lowercased().first, character.isASCII else {
+            return nil
+        }
+        var eventModifiers: EventModifiers = []
+        if modifiers.contains(.command) { eventModifiers.insert(.command) }
+        if modifiers.contains(.option) { eventModifiers.insert(.option) }
+        if modifiers.contains(.control) { eventModifiers.insert(.control) }
+        if modifiers.contains(.shift) { eventModifiers.insert(.shift) }
+        return KeyboardShortcut(KeyEquivalent(character), modifiers: eventModifiers)
     }
 }

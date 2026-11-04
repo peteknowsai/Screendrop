@@ -18,6 +18,14 @@ enum CaptureTextOutcome {
     case copied(String)
 }
 
+/// What a recording is for. Camera-only renders the camera full frame
+/// (Task 27); a Claude Code recording logs clicks and starts private.
+enum RecordingSourceIntent {
+    case screen
+    case cameraOnly
+    case claude
+}
+
 /// Single long-lived coordinator that manages the capture → preview flow.
 @Observable
 final class CaptureCoordinator {
@@ -162,6 +170,57 @@ final class CaptureCoordinator {
             CaptureFeedbackSound.play()
         }
         return .copied(text)
+    }
+
+    // MARK: - Loom's record entry points
+
+    /// Opens the recorder already pointing at a display, a window, or
+    /// dragging out an area: the menu items and ⌥⇧1–3.
+    func recordDisplay() {
+        openRecorder { RecordingSourceTargetPresenter.shared.begin(.display) }
+    }
+
+    func recordWindow() {
+        openRecorder { RecordingSourceTargetPresenter.shared.begin(.window) }
+    }
+
+    func recordCustomSize() {
+        openRecorder { RecordingAreaSelectionPresenter.shared.begin() }
+    }
+
+    /// Opens the recorder with Claude Code mode on; Task 32 adds the mode.
+    func recordForClaude() {
+        openRecorder(intent: .claude)
+    }
+
+    /// A 1280×720 area in the middle of the main display, with the camera
+    /// on: the camera fills the video, so the screen area is only a canvas.
+    func recordCameraOnly() {
+        guard !ScreenRecordingManager.shared.isActive else { return }
+        if ScreendropPreferences.recordingCameraDeviceID.isEmpty,
+           let camera = RecordingDeviceCatalog.cameras().first {
+            ScreendropPreferences.recordingCameraDeviceID = camera.uniqueID
+        }
+        Task {
+            // The first screen is always the main display, the one with the menu bar.
+            guard let screen = NSScreen.screens.first,
+                  let content = try? await ScreenRecordingCapture.availableContent(),
+                  let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
+            else { return }
+            let frame = screen.frame
+            let size = CGSize(width: min(1280, frame.width), height: min(720, frame.height))
+            let rect = CGRect(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2,
+                              width: size.width, height: size.height)
+            ScreenRecordingManager.shared.sourceIntent = .cameraOnly
+            recordArea(display, rect: rect)
+        }
+    }
+
+    private func openRecorder(intent: RecordingSourceIntent = .screen, then begin: () -> Void = {}) {
+        guard !ScreenRecordingManager.shared.isActive else { return }
+        ScreenRecordingManager.shared.sourceIntent = intent
+        RecordingPickerPresenter.shared.show()
+        begin()
     }
 
     func recordFullscreen(_ display: SCDisplay) {
