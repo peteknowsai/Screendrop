@@ -1,4 +1,5 @@
 import Carbon.HIToolbox
+import CoreImage
 import Foundation
 
 // The Loom parity checks: pure helpers compiled alongside this file, no
@@ -12,7 +13,65 @@ struct LoomParityChecks {
         checkWallpaper()
         checkInlineConfirm()
         checkBubble()
+        checkCameraFilter()
         print("loom parity checks passed")
+    }
+
+    /// One pixel of `image`, as 0-255 RGBA.
+    static func pixel(_ image: CIImage, context: CIContext) -> [UInt8] {
+        var out = [UInt8](repeating: 0, count: 4)
+        context.render(
+            image,
+            toBitmap: &out,
+            rowBytes: 4,
+            bounds: CGRect(x: 1, y: 1, width: 1, height: 1),
+            format: .RGBA8,
+            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+        )
+        return out
+    }
+
+    /// Filters and backgrounds persist, and a background replaces only
+    /// what the mask says isn't you.
+    static func checkCameraFilter() {
+        for filter in CameraFilter.allCases {
+            let data = try! JSONEncoder().encode(filter)
+            precondition(try! JSONDecoder().decode(CameraFilter.self, from: data) == filter)
+        }
+        precondition(CameraFilter.none.ciFilter() == nil)
+        precondition(CameraFilter.mono.ciFilter()?.name == "CIPhotoEffectMono")
+        precondition(CameraFilter.stored(in: emptyDefaults()) == .none)
+
+        let backgrounds: [CameraBackground] = [.none, .blur, .gradient(1), .color(hex: "#ff0000"), .image(path: "/tmp/a.png")]
+        for background in backgrounds {
+            let data = try! JSONEncoder().encode(background)
+            precondition(try! JSONDecoder().decode(CameraBackground.self, from: data) == background)
+        }
+        precondition(CameraBackground.stored(in: emptyDefaults()) == .none)
+
+        let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])
+        let extent = CGRect(x: 0, y: 0, width: 4, height: 4)
+        let frame = CIImage(color: CIColor(red: 0, green: 0, blue: 1)).cropped(to: extent)
+        let black = CIImage(color: .black).cropped(to: extent)
+        let white = CIImage(color: .white).cropped(to: extent)
+
+        let untouched = composite(frame: frame, mask: white, background: .none, gradients: [])
+        precondition(untouched.extent == extent && pixel(untouched, context: context) == pixel(frame, context: context))
+
+        let replaced = pixel(composite(frame: frame, mask: black, background: .color(hex: "#ff0000"), gradients: []), context: context)
+        precondition(replaced[0] > 240 && replaced[2] < 15, "no person should show the red fill, got \(replaced)")
+        let kept = pixel(composite(frame: frame, mask: white, background: .color(hex: "#ff0000"), gradients: []), context: context)
+        precondition(kept[2] > 240 && kept[0] < 15, "the person should stay, got \(kept)")
+
+        // Warm has to read warmer than cool on the same grey.
+        let grey = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)).cropped(to: extent)
+        func through(_ filter: CameraFilter) -> [UInt8] {
+            let f = filter.ciFilter()!
+            f.setValue(grey, forKey: kCIInputImageKey)
+            return pixel(f.outputImage!.cropped(to: extent), context: context)
+        }
+        let warm = through(.warm), cool = through(.cool)
+        precondition(warm[0] > warm[2] && cool[2] > cool[0], "warm \(warm) should lean red, cool \(cool) blue")
     }
 
     /// The bubble snaps by quadrant, keeps its long side, and maps onto the

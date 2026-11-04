@@ -13,6 +13,7 @@ xcrun swiftc -module-cache-path "$work/ModuleCache" \
   Screendrop/RecordingScreenCleanup.swift \
   Screendrop/InlineConfirm.swift \
   Screendrop/CameraBubbleModel.swift \
+  Screendrop/CameraFilter.swift \
   scripts/check-loom-parity.swift \
   -o "$work/check"
 "$work/check"

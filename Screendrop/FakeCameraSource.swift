@@ -69,8 +69,13 @@ nonisolated final class FakeCameraSource: @unchecked Sendable {
     }
 
     private func tick() {
+        let timing = CMSampleTimingInfo(
+            duration: CMTime(value: 1, timescale: 30),
+            presentationTimeStamp: CMClockGetTime(CMClockGetHostTimeClock()),
+            decodeTimeStamp: .invalid
+        )
         guard let pixelBuffer = nextFrame() ?? restartAndRead(),
-              let sample = Self.sample(pixelBuffer, at: CMClockGetTime(CMClockGetHostTimeClock())) else { return }
+              let sample = makeSampleBuffer(pixelBuffer, timing: timing) else { return }
         handler(sample)
     }
 
@@ -98,28 +103,5 @@ nonisolated final class FakeCameraSource: @unchecked Sendable {
         guard reader.startReading() else { return }
         self.reader = reader
         self.output = output
-    }
-
-    private static func sample(_ pixelBuffer: CVPixelBuffer, at time: CMTime) -> CMSampleBuffer? {
-        var format: CMVideoFormatDescription?
-        guard CMVideoFormatDescriptionCreateForImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescriptionOut: &format
-        ) == noErr, let format else { return nil }
-        var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: 30),
-            presentationTimeStamp: time,
-            decodeTimeStamp: .invalid
-        )
-        var sample: CMSampleBuffer?
-        guard CMSampleBufferCreateReadyWithImageBuffer(
-            allocator: kCFAllocatorDefault,
-            imageBuffer: pixelBuffer,
-            formatDescription: format,
-            sampleTiming: &timing,
-            sampleBufferOut: &sample
-        ) == noErr else { return nil }
-        return sample
     }
 }

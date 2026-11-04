@@ -79,6 +79,17 @@ final class CameraRecordingManager {
         layer.videoGravity = .resizeAspectFill
         previewLayer = layer
         engine = CameraCaptureEngine(preview: layer.sampleBufferRenderer)
+        reloadFrameSettings()
+    }
+
+    /// Picks up the bubble settings' filter, flip and background; frames
+    /// from the next one on carry them.
+    func reloadFrameSettings() {
+        engine.processor.update(CameraFrameProcessor.Settings(
+            filter: CameraFilter.stored(),
+            flip: ScreendropPreferences.recordingCameraFlip,
+            background: CameraBackground.stored()
+        ))
     }
 
     /// Starts the capture session and shows the floating preview, without
@@ -233,6 +244,7 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
 
     /// The bubble's renderer; enqueueing is safe from the camera queue.
     private let preview: AVSampleBufferVideoRenderer
+    let processor = CameraFrameProcessor()
 
     init(preview: AVSampleBufferVideoRenderer) {
         self.preview = preview
@@ -332,7 +344,8 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
     }
 
     /// Every frame, from a device or the fake, comes through here.
-    func handle(_ sampleBuffer: CMSampleBuffer) {
+    func handle(_ input: CMSampleBuffer) {
+        let sampleBuffer = processed(input) ?? input
         if currentDimensions == nil, let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
             let dimensions = CMVideoFormatDescriptionGetDimensions(format)
             dimensionsLock.withLock { frameDimensions = dimensions }
@@ -341,6 +354,16 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
         Self.markForImmediateDisplay(sampleBuffer)
         if preview.status == .failed { preview.flush() }
         if preview.isReadyForMoreMediaData { preview.enqueue(sampleBuffer) }
+    }
+
+    /// The frame with the bubble's settings applied, on the same timing.
+    private func processed(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer? {
+        guard !processor.isPassthrough, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+        let output = processor.process(pixelBuffer)
+        guard output !== pixelBuffer else { return nil }
+        var timing = CMSampleTimingInfo()
+        guard CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timing) == noErr else { return nil }
+        return makeSampleBuffer(output, timing: timing)
     }
 
     /// Live frames are already late by their capture latency; without this

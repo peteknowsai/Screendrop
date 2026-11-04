@@ -36,6 +36,7 @@ enum ScreendropPreferences {
     static let startingToolLastUsed = "lastUsed"
     static let trimFullscreenMenuBarKey = "trimFullscreenMenuBar"
     static let recordingCameraDeviceIDKey = "recordingCameraDeviceID"
+    static let recordingCameraFlipKey = "recordingCameraFlip"
     static let recordingMicrophoneDeviceIDKey = "recordingMicrophoneDeviceID"
     static let recordingSystemAudioKey = "recordingSystemAudio"
     static let recordingStartDelaySecondsKey = "recordingStartDelaySeconds"
@@ -125,6 +126,12 @@ enum ScreendropPreferences {
     }
 
     /// Unique ID of the camera recorded alongside the screen. Empty = camera off.
+    /// Flips the camera left to right on top of its usual mirror view.
+    static var recordingCameraFlip: Bool {
+        get { UserDefaults.standard.bool(forKey: recordingCameraFlipKey) }
+        set { UserDefaults.standard.set(newValue, forKey: recordingCameraFlipKey) }
+    }
+
     static var recordingCameraDeviceID: String {
         get { UserDefaults.standard.string(forKey: recordingCameraDeviceIDKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: recordingCameraDeviceIDKey) }

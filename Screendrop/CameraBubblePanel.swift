@@ -39,7 +39,7 @@ final class CameraBubblePanel {
     @ObservationIgnored private var bubbleView: CameraBubbleView?
     @ObservationIgnored private var controls: NSPanel?
     @ObservationIgnored private var ghost: NSPanel?
-    @ObservationIgnored private var displayID: CGDirectDisplayID?
+    @ObservationIgnored private(set) var displayID: CGDirectDisplayID?
     @ObservationIgnored private var isOverBubble = false
     @ObservationIgnored private var isOverControls = false
     @ObservationIgnored private var hideControlsTask: Task<Void, Never>?
@@ -173,6 +173,15 @@ final class CameraBubblePanel {
         let x = min(max(bubble.minX - 14, visible.minX), visible.maxX - size.width)
         controls.setFrame(CGRect(x: x, y: y, width: size.width, height: size.height), display: true)
         controls.orderFrontRegardless()
+    }
+
+    /// The settings section opened or closed; the panel follows its size
+    /// once SwiftUI has laid it out.
+    func controlsDidResize() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, controls?.isVisible == true else { return }
+            showControls()
+        }
     }
 
     private func hideControls() {
@@ -427,6 +436,7 @@ private struct CameraBubbleControls: View {
     @State private var bubble = CameraBubblePanel.shared
     @State private var recorder = ScreenRecordingManager.shared
     @AppStorage(ScreendropPreferences.recordingMicrophoneDeviceIDKey) private var microphoneID = ""
+    @State private var showsSettings = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -442,8 +452,8 @@ private struct CameraBubbleControls: View {
             .accessibilityLabel("Bubble size")
 
             HStack(spacing: 6) {
-                iconButton("slider.horizontal.3", label: "Camera settings") {
-                    SettingsWindowController.show(tab: .video)
+                iconButton("slider.horizontal.3", label: "Camera settings", isOn: showsSettings) {
+                    showsSettings.toggle()
                 }
 
                 Spacer(minLength: 4)
@@ -481,7 +491,12 @@ private struct CameraBubbleControls: View {
                     bubble.state.isHidden = true
                 }
             }
+
+            if showsSettings {
+                CameraSettingsSection()
+            }
         }
+        .onChange(of: showsSettings) { _, _ in bubble.controlsDidResize() }
         .foregroundStyle(Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3F / 255))
         .padding(14)
         .frame(width: 268)
@@ -489,11 +504,17 @@ private struct CameraBubbleControls: View {
         .padding(14)
     }
 
-    private func iconButton(_ systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+    private func iconButton(
+        _ systemImage: String,
+        label: String,
+        isOn: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 16, weight: .regular))
                 .frame(width: 36, height: 36)
+                .background(Circle().fill(.black.opacity(isOn ? 0.07 : 0)))
                 .contentShape(Circle())
         }
         .buttonStyle(BarButtonStyle())
