@@ -35,6 +35,11 @@ final class CameraBubblePanel {
         didSet { bubbleView?.isDimmed = isPaused }
     }
 
+    /// The hover controls' camera settings are open; the panel grows to fit.
+    var showsControlSettings = false {
+        didSet { if showsControlSettings != oldValue { controlsDidResize() } }
+    }
+
     @ObservationIgnored private var panel: NSPanel?
     @ObservationIgnored private var bubbleView: CameraBubbleView?
     @ObservationIgnored private var controls: NSPanel?
@@ -164,7 +169,9 @@ final class CameraBubblePanel {
     private func showControls() {
         guard let panel, let visible = screen?.visibleFrame else { return }
         let controls = controls ?? makeControls()
-        let size = controls.contentView?.fittingSize ?? CGSize(width: 296, height: 120)
+        // The panel's own view doesn't hand its size to AppKit (see
+        // makeControls), so its fittingSize is zero; a spare copy measures.
+        let size = NSHostingView(rootView: CameraBubbleControls()).fittingSize
         let bubble = panel.frame.insetBy(dx: Self.slack, dy: Self.slack)
         let gap: CGFloat = 8
         // Below the bubble when there's room, above it otherwise.
@@ -436,7 +443,8 @@ private struct CameraBubbleControls: View {
     @State private var bubble = CameraBubblePanel.shared
     @State private var recorder = ScreenRecordingManager.shared
     @AppStorage(ScreendropPreferences.recordingMicrophoneDeviceIDKey) private var microphoneID = ""
-    @State private var showsSettings = false
+
+    private var showsMute: Bool { recorder.isActive && !microphoneID.isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -452,8 +460,8 @@ private struct CameraBubbleControls: View {
             .accessibilityLabel("Bubble size")
 
             HStack(spacing: 6) {
-                iconButton("slider.horizontal.3", label: "Camera settings", isOn: showsSettings) {
-                    showsSettings.toggle()
+                iconButton("slider.horizontal.3", label: "Camera settings", isOn: bubble.showsControlSettings) {
+                    bubble.showsControlSettings.toggle()
                 }
 
                 Spacer(minLength: 4)
@@ -482,7 +490,7 @@ private struct CameraBubbleControls: View {
 
                 Spacer(minLength: 4)
 
-                if recorder.isActive && !microphoneID.isEmpty {
+                if showsMute {
                     iconButton(recorder.isMicMuted ? "mic.slash" : "mic", label: recorder.isMicMuted ? "Unmute" : "Mute") {
                         recorder.isMicMuted.toggle()
                     }
@@ -492,14 +500,15 @@ private struct CameraBubbleControls: View {
                 }
             }
 
-            if showsSettings {
+            if bubble.showsControlSettings {
                 CameraSettingsSection()
             }
         }
-        .onChange(of: showsSettings) { _, _ in bubble.controlsDidResize() }
         .foregroundStyle(Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3F / 255))
         .padding(14)
-        .frame(width: 268)
+        // The row's buttons are fixed at 36: settings, four shapes, camera
+        // off, and mute while recording with a mic, plus their spacing.
+        .frame(width: showsMute ? 332 : 290)
         .glassHUD(radius: 24)
         .padding(14)
     }
