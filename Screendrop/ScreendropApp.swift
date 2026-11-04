@@ -18,6 +18,9 @@ enum ScreendropMain {
         if AgentRelay.isRequested {
             AgentRelay.run()
         }
+        if LoomAppChecks.isRequested {
+            MainActor.assumeIsolated { LoomAppChecks.run() }
+        }
         ScreendropApp.main()
     }
 }

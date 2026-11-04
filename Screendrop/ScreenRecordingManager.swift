@@ -451,6 +451,9 @@ final class ScreenRecordingManager {
                     "The screen footage was saved, but some Studio metadata could not be saved."
                 )
             }
+            if action == .preview || action == .terminate {
+                writeStartingEdit(to: session, hasCamera: cameraResult != nil, intent: restartIntent)
+            }
         }
 
         cleanupAfterRecording()
@@ -509,6 +512,31 @@ final class ScreenRecordingManager {
             RecordingControlPresenter.shared.hide()
             RecordingAreaHighlightPresenter.shared.hide()
             terminationCompletion?(session)
+        }
+    }
+
+    /// Loom's plain look for the take, with the bubble where it was. A
+    /// failure only costs the take its plain look; Studio's defaults apply.
+    private func writeStartingEdit(to session: RecordingSession, hasCamera: Bool, intent: RecordingSourceIntent) {
+        let scale = max(manifest.pixelScale, 1)
+        let camera = CameraRecordingManager.shared
+        let document = LoomEditDocument.make(input: .init(
+            captureSizeInPoints: CGSize(
+                width: CGFloat(manifest.pixelWidth) / CGFloat(scale),
+                height: CGFloat(manifest.pixelHeight) / CGFloat(scale)
+            ),
+            hasCamera: hasCamera,
+            bubble: CameraBubblePanel.shared.state,
+            hiddenIntervals: camera.hiddenIntervals,
+            fullIntervals: camera.fullIntervals,
+            highlightClicks: ScreendropPreferences.recordingHighlightClicks,
+            resolution: ScreendropPreferences.recordingUploadResolution,
+            intent: intent
+        ))
+        do {
+            try session.writeStartingDocument(document)
+        } catch {
+            NSLog("[Screendrop] Failed to save the take's starting edit: \(error)")
         }
     }
 

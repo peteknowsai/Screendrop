@@ -26,6 +26,9 @@ nonisolated struct RecordingSession: Sendable, Equatable {
     /// only rewritten by an explicit save, so a crash mid-edit costs nothing
     /// and closing a window still has something meaningful to prompt about.
     static let draftDocumentFileName = "edit.draft.json"
+    /// The plain edit a new take starts with (LoomEditDocument). Read only
+    /// when neither of the above exists, so it never counts as a save.
+    static let startingDocumentFileName = "edit.start.json"
     static let projectMetadataFileName = "project.json"
     /// The document that produced the current flattened deliverable, so a
     /// cached render can be proven fresh instead of assumed fresh.
@@ -56,6 +59,7 @@ nonisolated struct RecordingSession: Sendable, Equatable {
     var pointerCaptureURL: URL { directoryURL.appendingPathComponent(Self.pointerCaptureFileName) }
     var captureManifestURL: URL { directoryURL.appendingPathComponent(Self.captureManifestFileName) }
     var editDocumentURL: URL { directoryURL.appendingPathComponent(Self.editDocumentFileName) }
+    var startingDocumentURL: URL { directoryURL.appendingPathComponent(Self.startingDocumentFileName) }
     var draftDocumentURL: URL { directoryURL.appendingPathComponent(Self.draftDocumentFileName) }
     var projectMetadataURL: URL { directoryURL.appendingPathComponent(Self.projectMetadataFileName) }
     var renderStampURL: URL { directoryURL.appendingPathComponent(Self.renderStampFileName) }
@@ -214,7 +218,17 @@ nonisolated struct RecordingSession: Sendable, Equatable {
     /// editor (flattening, uploads) uses this too, so a deliverable always
     /// reflects the edits the user can see.
     func effectiveEditDocument() -> RecordingEditDocument? {
-        loadDraftDocument() ?? loadEditDocument()
+        loadDraftDocument() ?? loadEditDocument() ?? loadStartingDocument()
+    }
+
+    func loadStartingDocument() -> RecordingEditDocument? {
+        guard let data = try? Data(contentsOf: startingDocumentURL) else { return nil }
+        return try? CaptureManifest.decoder.decode(RecordingEditDocument.self, from: data)
+    }
+
+    func writeStartingDocument(_ document: RecordingEditDocument) throws {
+        let data = try CaptureManifest.encoder.encode(document)
+        try data.write(to: startingDocumentURL, options: .atomic)
     }
 
     /// True when unsaved edits are sitting in the draft. A draft identical to
