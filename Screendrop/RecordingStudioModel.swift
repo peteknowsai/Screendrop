@@ -58,6 +58,10 @@ enum RecordingStudioShareState: Equatable {
 final class RecordingStudioModel {
     let sessionURL: URL
     private(set) var session: RecordingSession?
+    /// The link this take already lives behind; Share updates it in place.
+    private(set) var sharedLinkID: String?
+    /// Bumped when a Studio link asks for the transcript cleanup tools.
+    var cleanupRequests = 0
     private(set) var manifest: CaptureManifest?
     private(set) var pointerCapture = PointerCaptureFile()
     private(set) var recordedPressTimes: [TimeInterval] = []
@@ -554,6 +558,8 @@ final class RecordingStudioModel {
             }
             session.updateProjectMetadata { $0.lastOpenedAt = Date() }
         }
+        if let session { sharedLinkID = cloudID(forSession: session) }
+        if StudioProjectRegistry.shared.takeCleanupRequest(for: sessionURL) { cleanupRequests += 1 }
         StudioProjectRegistry.shared.register(self)
     }
 
@@ -3546,6 +3552,7 @@ final class RecordingStudioModel {
         let cachedDeliverable = freshDeliverableURL
         let configuration = cachedDeliverable == nil ? makeExportConfiguration() : nil
         let session = session
+        let existingID = sharedLinkID
         let renderedDocument = session == nil ? nil : currentDocument()
         shareState = cachedDeliverable == nil ? .rendering(progress: 0) : .uploading
 
@@ -3606,12 +3613,27 @@ final class RecordingStudioModel {
                 self.shareState = .uploading
                 let itemID = self.historyItemID(for: session) ?? UUID()
                 self.shareItemID = itemID
-                let result = try await CloudUploader.shared.upload(
-                    itemID: itemID,
-                    fileURL: uploadURL,
-                    title: options.trimmedTitleOrNil,
-                    socialEnabled: options.socialEnabled
-                )
+                let titleLeftEmpty = options.trimmedTitleOrNil == nil
+                func upload(into id: String?) async throws -> CloudUploadResult {
+                    try await CloudUploader.shared.upload(
+                        itemID: itemID,
+                        fileURL: uploadURL,
+                        title: options.trimmedTitleOrNil,
+                        socialEnabled: options.socialEnabled,
+                        existingID: id,
+                        // An update with the field left empty keeps the title.
+                        keepsTitle: id != nil && titleLeftEmpty
+                    )
+                }
+                let result: CloudUploadResult
+                do {
+                    result = try await upload(into: existingID)
+                } catch CloudUploadError.serverError(let code, _) where code == 404 && existingID != nil {
+                    // Deleted on the web since: share it to a new link.
+                    CloudUploader.shared.clearUploadState(for: itemID)
+                    result = try await upload(into: nil)
+                }
+                self.sharedLinkID = result.id
 
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(result.url, forType: .string)

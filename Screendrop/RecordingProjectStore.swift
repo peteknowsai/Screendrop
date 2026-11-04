@@ -187,6 +187,28 @@ final class RecordingProjectOpener {
         RecordingProjectStore.shared.reload()
         openHandler?(session.directoryURL)
     }
+
+    /// `screendrop://studio?id=<8 hex>[&tool=cleanup]`, from the share
+    /// page's Open on Mac: Studio on the recording behind that link.
+    func open(link: URL) {
+        guard link.scheme == "screendrop", link.host == "studio",
+              let items = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems,
+              let id = items.first(where: { $0.name == "id" })?.value else { return }
+        NSApp.activate()
+        guard let session = RecordingSessionStore.allSessions().first(where: { cloudID(forSession: $0) == id }) else {
+            let alert = NSAlert()
+            alert.messageText = "This recording isn't on this Mac"
+            alert.informativeText = "Open it from the Mac that recorded it."
+            alert.runModal()
+            return
+        }
+        if items.contains(where: { $0.name == "tool" && $0.value == "cleanup" }) {
+            StudioProjectRegistry.shared.requestCleanup(
+                for: ScreenshotHistoryStore.shared.editorURL(for: session.directoryURL)
+            )
+        }
+        open(session)
+    }
 }
 
 /// Knows which Studio windows are currently holding uncommitted edits, so
@@ -196,6 +218,8 @@ final class StudioProjectRegistry {
     static let shared = StudioProjectRegistry()
 
     private var models: [ObjectIdentifier: WeakModel] = [:]
+    /// Studio links that asked for the cleanup tools before their window loaded.
+    private var pendingCleanupPaths: Set<String> = []
 
     private struct WeakModel {
         weak var model: RecordingStudioModel?
@@ -209,6 +233,23 @@ final class StudioProjectRegistry {
 
     func unregister(_ model: RecordingStudioModel) {
         models.removeValue(forKey: ObjectIdentifier(model))
+    }
+
+    /// An open Studio takes it now; one still opening takes it on load.
+    func requestCleanup(for url: URL) {
+        let path = url.standardizedFileURL.path
+        let open = models.values.compactMap(\.model).first {
+            $0.isLoaded && !$0.isAgentSession && $0.sessionURL.standardizedFileURL.path == path
+        }
+        if let open {
+            open.cleanupRequests += 1
+        } else {
+            pendingCleanupPaths.insert(path)
+        }
+    }
+
+    func takeCleanupRequest(for url: URL) -> Bool {
+        pendingCleanupPaths.remove(url.standardizedFileURL.path) != nil
     }
 
     func hasLoadedEditor(for url: URL) -> Bool {

@@ -37,3 +37,19 @@ nonisolated struct RecordingProjectMetadata: Codable, Sendable, Equatable {
         self.lastOpenedAt = lastOpenedAt
     }
 }
+
+/// The id at the end of a share link, which the worker writes as 8 hex
+/// characters; nil for any other page, such as the library.
+nonisolated func cloudID(fromURL url: String?) -> String? {
+    guard let url, let id = URL(string: url)?.lastPathComponent,
+          id.range(of: "^[0-9a-f]{8}$", options: .regularExpression) != nil else { return nil }
+    return id
+}
+
+/// The link a session's video lives behind: the one reserved when the take
+/// started, else the one Studio shared it to before.
+func cloudID(forSession session: RecordingSession) -> String? {
+    if let id = session.loadProjectMetadata()?.cloudID { return id }
+    let path = session.directoryURL.standardizedFileURL.path
+    return cloudID(fromURL: ScreenshotHistoryStore.shared.items.first { $0.recordingSessionPath == path }?.cloudURL)
+}

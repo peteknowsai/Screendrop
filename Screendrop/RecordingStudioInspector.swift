@@ -131,6 +131,13 @@ struct StudioInspector: View {
         .task {
             await wallpaperStore.reload()
         }
+        .task(id: model.cleanupRequests) {
+            // A Studio link's tool=cleanup: the transcript's edit tab, where
+            // filler words come out.
+            guard model.cleanupRequests > 0 else { return }
+            page = .captions
+            transcriptTab = .edit
+        }
     }
 
     /// A selected zoom wins: clicking one is always a request to edit it.

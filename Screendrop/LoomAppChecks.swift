@@ -24,6 +24,7 @@ enum LoomAppChecks {
     static func run() -> Never {
         checkLoomEditDocument()
         checkClaudeLog()
+        checkCloudID()
         print("loom app checks passed")
         exit(0)
     }
@@ -32,6 +33,13 @@ enum LoomAppChecks {
     @MainActor
     /// The Claude Code log: one page per change, the ask, the numbers in
     /// the video, positions within what was recorded, the worker's keys.
+    static func checkCloudID() {
+        let id = cloudID(fromURL: "https://x.workers.dev/7f3e91c2")
+        precondition(id == "7f3e91c2", "a share link's id read as \(id ?? "nil")")
+        precondition(cloudID(fromURL: "https://x.workers.dev/library") == nil, "the library page read as a link")
+        precondition(cloudID(fromURL: nil) == nil, "no link read as one")
+    }
+
     static func checkClaudeLog() {
         var log = ClaudeCodeLog()
         let page = ClaudeCodeLog.PageEntry(t: 1, app: "Safari", title: "Checkout", url: nil)

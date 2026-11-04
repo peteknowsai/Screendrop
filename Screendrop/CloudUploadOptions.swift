@@ -44,23 +44,28 @@ enum CloudUploadPreferences {
 /// remembers the toggle choice as the default for next time.
 struct CloudUploadOptionsPopover: View {
     let suggestedTitle: String
+    /// Replacing the video behind a link that already exists.
+    let isUpdate: Bool
     let onConfirm: (CloudUploadOptions) -> Void
 
     @State private var title: String
     @State private var socialEnabled = CloudUploadPreferences.lastSocialEnabled
     @Environment(\.dismiss) private var dismiss
 
-    init(suggestedTitle: String = "", onConfirm: @escaping (CloudUploadOptions) -> Void) {
+    init(suggestedTitle: String = "", isUpdate: Bool = false, onConfirm: @escaping (CloudUploadOptions) -> Void) {
         self.suggestedTitle = suggestedTitle
+        self.isUpdate = isUpdate
         self.onConfirm = onConfirm
         _title = State(initialValue: suggestedTitle)
     }
 
     var body: some View {
         InspectorPopover(
-            title: "Share Options",
-            message: "Uploads to your cloud and copies a share link.",
-            confirmTitle: "Upload",
+            title: isUpdate ? "Update Video" : "Share Options",
+            message: isUpdate
+                ? "Replaces the video behind your link. Comments, views and the link stay."
+                : "Uploads to your cloud and copies a share link.",
+            confirmTitle: isUpdate ? "Update video" : "Upload",
             onCancel: { dismiss() },
             onConfirm: {
                 CloudUploadPreferences.lastSocialEnabled = socialEnabled
@@ -72,7 +77,7 @@ struct CloudUploadOptionsPopover: View {
             VStack(alignment: .leading, spacing: InspectorMetrics.rowSpacing) {
                 VStack(alignment: .leading, spacing: InspectorMetrics.groupLabelSpacing) {
                     InspectorGroupLabel("Title")
-                    TextField("Title", text: $title, prompt: Text("Untitled"))
+                    TextField("Title", text: $title, prompt: Text(isUpdate ? "Keep the current title" : "Untitled"))
                         .labelsHidden()
                         .lineLimit(1)
                         .inspectorTextField()

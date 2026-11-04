@@ -87,13 +87,15 @@ final class CloudUploader: NSObject {
         return CloudUploadResult(id: id, url: link, filename: "", size: 0)
     }
 
-    /// `existingID` puts the file behind a link that already exists.
+    /// `existingID` puts the file behind a link that already exists;
+    /// `keepsTitle` leaves that link's title as it is.
     func upload(
         itemID: UUID,
         fileURL: URL,
         title: String? = nil,
         socialEnabled: Bool = true,
-        existingID: String? = nil
+        existingID: String? = nil,
+        keepsTitle: Bool = false
     ) async throws -> CloudUploadResult {
         guard isConfigured else {
             throw CloudUploadError.notConfigured
@@ -225,7 +227,9 @@ final class CloudUploader: NSObject {
             uploadProgress.removeValue(forKey: itemID)
             uploadedURLs[itemID] = result.url
             if isVideo {
-                scheduleSidecarUpload(uploadID: result.id, fileURL: fileURL, title: title, creds: creds)
+                scheduleSidecarUpload(
+                    uploadID: result.id, fileURL: fileURL, title: title, keepsTitle: keepsTitle, creds: creds
+                )
             } else {
                 scheduleSearchText(uploadID: result.id, fileURL: fileURL, creds: creds)
             }
@@ -249,7 +253,13 @@ final class CloudUploader: NSObject {
     /// Ships the share-page extras (poster, title, transcript) after the
     /// video itself is up. Best-effort and detached: the share link is
     /// already usable, sidecars enrich the page when they land.
-    private func scheduleSidecarUpload(uploadID: String, fileURL: URL, title: String?, creds: CloudCredentials) {
+    private func scheduleSidecarUpload(
+        uploadID: String,
+        fileURL: URL,
+        title: String?,
+        keepsTitle: Bool,
+        creds: CloudCredentials
+    ) {
         let item = ScreenshotHistoryStore.shared.items.first {
             $0.url.standardizedFileURL == fileURL.standardizedFileURL
         }
@@ -262,6 +272,7 @@ final class CloudUploader: NSObject {
                 sessionDirectory: sessionDirectory,
                 createdAt: createdAt,
                 customTitle: title,
+                keepsTitle: keepsTitle,
                 creds: creds
             )
         }

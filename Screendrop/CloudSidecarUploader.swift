@@ -44,13 +44,18 @@ nonisolated enum CloudSidecarUploader {
         sessionDirectory: URL?,
         createdAt: Date,
         customTitle: String? = nil,
+        keepsTitle: Bool = false,
         creds: CloudCredentials
     ) async {
         var fields: [(name: String, value: String)] = []
         var files: [(name: String, filename: String, contentType: String, data: Data)] = []
 
         let trimmedCustomTitle = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
-        fields.append(("title", trimmedCustomTitle?.isEmpty == false ? trimmedCustomTitle! : defaultTitle(for: createdAt)))
+        if let trimmedCustomTitle, !trimmedCustomTitle.isEmpty {
+            fields.append(("title", trimmedCustomTitle))
+        } else if !keepsTitle {
+            fields.append(("title", defaultTitle(for: createdAt)))
+        }
 
         if let poster = await posterFrame(for: uploadedFileURL) {
             files.append(("poster", "poster.jpg", "image/jpeg", poster))
