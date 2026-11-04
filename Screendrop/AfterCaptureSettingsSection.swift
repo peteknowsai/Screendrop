@@ -27,7 +27,7 @@ private struct AfterCaptureToggleRow: View {
     private let action: AfterCaptureAction
 
     init(action: AfterCaptureAction, type: AfterCaptureType) {
-        _isOn = AppStorage(wrappedValue: action.defaultValue, action.storageKey(for: type))
+        _isOn = AppStorage(wrappedValue: action.defaultValue(for: type), action.storageKey(for: type))
         self.action = action
         title = action.title
         subtitle = action.subtitle

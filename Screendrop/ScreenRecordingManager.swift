@@ -140,6 +140,10 @@ final class ScreenRecordingManager {
     var errorMessage: String?
     var onFinishRecording: ((RecordingSession, CGDirectDisplayID?) -> Void)?
 
+    /// Loom's link at record start: reserved as the take begins, copied the
+    /// moment it stops. A restart keeps it for the new take.
+    private var linkReservation: Task<CloudUploadResult?, Never>?
+
     private let capture = ScreenRecordingCapture()
     private let writer = ScreenRecordingWriter()
     private let pointerActivityRecorder = PointerActivityRecorder()
@@ -306,6 +310,7 @@ final class ScreenRecordingManager {
                 accumulatedPauseDuration = 0
                 elapsedTime = 0
                 state = .recording
+                reserveLinkIfNeeded()
                 if sourceIntent != .cameraOnly {
                     PenOverlayController.shared.begin(
                         displayID: target.displayID,
@@ -410,11 +415,45 @@ final class ScreenRecordingManager {
 
             let cameraResult = await CameraRecordingManager.shared.stop()
             let result = await writer.finishWriting()
-            finalizeSession(result: result, cameraResult: cameraResult)
+            let link = await linkReservation?.value
+            finalizeSession(result: result, cameraResult: cameraResult, link: link)
         }
     }
 
-    private func finalizeSession(result: ScreenRecordingWriterResult, cameraResult: CameraRecordingResult?) {
+    private func reserveLinkIfNeeded() {
+        guard linkReservation == nil,
+              CloudUploader.shared.isConfigured,
+              AfterCaptureActions.isEnabled(.upload, for: .recording) else { return }
+        let mode = switch sourceIntent {
+        case .screen: "screen"
+        case .cameraOnly: "camera"
+        case .claude: "claude"
+        }
+        // Takes for Claude Code start as only you.
+        let privacy = sourceIntent == .claude ? "private" : RecordingPrivacyChoice.stored().apiValue
+        linkReservation = Task {
+            // Offline or an older worker: the upload makes its own link at stop.
+            try? await CloudUploader.shared.reserve(mediaType: "video", privacy: privacy, sourceMode: mode)
+        }
+    }
+
+    /// The take owns the reserved link now: in project.json for uploads and
+    /// Studio's updates, and on the clipboard at once.
+    private func keepLink(_ link: CloudUploadResult, in session: RecordingSession, copies: Bool) {
+        var metadata = session.loadProjectMetadata() ?? RecordingProjectMetadata()
+        metadata.cloudID = link.id
+        metadata.cloudURL = link.url
+        session.writeProjectMetadata(metadata)
+        guard copies else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link.url, forType: .string)
+    }
+
+    private func finalizeSession(
+        result: ScreenRecordingWriterResult,
+        cameraResult: CameraRecordingResult?,
+        link: CloudUploadResult?
+    ) {
         let action = finishAction
         let restartSource = currentSource
         let restartIntent = sourceIntent
@@ -459,7 +498,15 @@ final class ScreenRecordingManager {
             }
             if action == .preview || action == .terminate {
                 writeStartingEdit(to: session, hasCamera: cameraResult != nil, intent: restartIntent)
+                if let link { keepLink(link, in: session, copies: action == .preview) }
             }
+        }
+
+        let keepsLinkForRestart = action == .restart && session != nil && result.fileIsUsable
+        if !keepsLinkForRestart { linkReservation = nil }
+        if let link, action == .discard || session == nil || !result.fileIsUsable {
+            // No orphan "Uploading" row on the worker.
+            Task { try? await CloudUploader.shared.deleteFromCloud(uploadID: link.id) }
         }
 
         cleanupAfterRecording()

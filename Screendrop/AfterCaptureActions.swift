@@ -73,10 +73,14 @@ enum AfterCaptureAction: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Default when the user hasn't chosen yet. The overlay defaults on, and
-    /// recordings open in the studio so zooms/backgrounds are discoverable.
-    var defaultValue: Bool {
-        self == .showOverlay || self == .openVideoEditor
+    /// Default when the user hasn't chosen yet. The overlay defaults on;
+    /// like Loom, stopping a recording gives you a link, not an editor.
+    func defaultValue(for type: AfterCaptureType) -> Bool {
+        switch self {
+        case .showOverlay: true
+        case .upload: type == .recording && CloudUploader.shared.isConfigured
+        default: false
+        }
     }
 }
 
@@ -84,7 +88,7 @@ enum AfterCaptureActions {
     static func isEnabled(_ action: AfterCaptureAction, for type: AfterCaptureType) -> Bool {
         let key = action.storageKey(for: type)
         if UserDefaults.standard.object(forKey: key) == nil {
-            return action.defaultValue
+            return action.defaultValue(for: type)
         }
         return UserDefaults.standard.bool(forKey: key)
     }

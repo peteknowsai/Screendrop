@@ -390,7 +390,9 @@ final class CaptureShelf {
         }
     }
 
-    func upload(id: ShelfItem.ID) {
+    /// `copiesLink` is off when the link went to the clipboard at stop, so
+    /// the upload finishing doesn't overwrite whatever was copied since.
+    func upload(id: ShelfItem.ID, copiesLink: Bool = true) {
         guard let item = item(id: id), CloudUploader.shared.isConfigured else { return }
         if item.kind == .video { engage(id) }
         let url = item.url
@@ -401,10 +403,12 @@ final class CaptureShelf {
                 let result = try await CloudUploader.shared.upload(
                     itemID: id,
                     fileURL: url,
-                    socialEnabled: CloudUploadPreferences.lastSocialEnabled
+                    socialEnabled: CloudUploadPreferences.lastSocialEnabled,
+                    existingID: Self.reservedCloudID(for: url)
                 )
-                copyString(result.url)
                 ScreenshotHistoryStore.shared.setCloudURL(for: url, cloudURL: result.url)
+                guard copiesLink else { return }
+                copyString(result.url)
                 flash(.linkCopied, on: id)
             } catch is CancellationError {
                 return
@@ -642,7 +646,7 @@ final class CaptureShelf {
 
         if AfterCaptureActions.isEnabled(.upload, for: type) {
             if let itemID {
-                upload(id: itemID)
+                upload(id: itemID, copiesLink: Self.reservedCloudID(for: url) == nil)
             } else {
                 uploadUnattended(url)
             }
@@ -665,17 +669,26 @@ final class CaptureShelf {
         }
     }
 
+    /// The link a recording reserved when it started, from its project.json.
+    static func reservedCloudID(for url: URL) -> String? {
+        let directory = url.deletingLastPathComponent()
+        guard RecordingSession.isSessionDirectory(directory) else { return nil }
+        return RecordingSession(directoryURL: directory).loadProjectMetadata()?.cloudID
+    }
+
     /// Uploads a capture that has no card to show the result on.
     private func uploadUnattended(_ url: URL) {
         guard CloudUploader.shared.isConfigured else { return }
         Task {
             do {
+                let existingID = Self.reservedCloudID(for: url)
                 let result = try await CloudUploader.shared.upload(
                     itemID: UUID(),
                     fileURL: url,
-                    socialEnabled: CloudUploadPreferences.lastSocialEnabled
+                    socialEnabled: CloudUploadPreferences.lastSocialEnabled,
+                    existingID: existingID
                 )
-                copyString(result.url)
+                if existingID == nil { copyString(result.url) }
                 ScreenshotHistoryStore.shared.setCloudURL(for: url, cloudURL: result.url)
             } catch {
                 print("Auto cloud upload failed: \(error)")

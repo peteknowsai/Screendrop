@@ -16,6 +16,7 @@ struct LoomParityChecks {
         checkBubble()
         checkCameraFilter()
         checkPen()
+        checkProgress()
         print("loom parity checks passed")
     }
 
@@ -183,6 +184,19 @@ struct LoomParityChecks {
         precondition(Set(ids).count == ids.count, "two actions share a hot key id")
         let sessionOnly = CaptureHotkeyAction.allCases.filter(\.isSessionOnly)
         precondition(sessionOnly == [.pauseResume, .stopRecording], "session-only actions are \(sessionOnly)")
+    }
+
+    /// The share page's bar: render then upload, at most one report per 2 s.
+    static func checkProgress() {
+        precondition(combinedProgress(render: 1, upload: 0.28) == 64, "\(combinedProgress(render: 1, upload: 0.28))")
+        precondition(combinedProgress(render: 0.5, upload: 0) == 25)
+        var throttle = ProgressThrottle()
+        let start = Date(timeIntervalSince1970: 0)
+        precondition(throttle.admits(10, at: start))
+        precondition(!throttle.admits(20, at: start.addingTimeInterval(1)), "two reports inside 2 s")
+        precondition(throttle.admits(30, at: start.addingTimeInterval(2.1)))
+        precondition(throttle.admits(100, at: start.addingTimeInterval(2.2)), "the final 100 waited")
+        precondition(!throttle.admits(100, at: start.addingTimeInterval(5)), "100 sent twice")
     }
 
     /// Each stroke is its own overlay, gone five seconds after mouse-up, and

@@ -20,6 +20,10 @@ nonisolated struct RecordingProjectMetadata: Codable, Sendable, Equatable {
     /// draft, which is what makes "Delete and close" safe to offer.
     var savedAt: Date?
     var lastOpenedAt: Date?
+    /// The share link reserved when the take started. Uploads and Studio's
+    /// updates go behind this id, so the link never changes.
+    var cloudID: String?
+    var cloudURL: String?
 
     init(
         version: Int? = RecordingProjectMetadata.currentVersion,

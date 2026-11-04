@@ -19,6 +19,7 @@ xcrun swiftc -module-cache-path "$work/ModuleCache" \
   Screendrop/CameraBubbleModel.swift \
   Screendrop/CameraFilter.swift \
   Screendrop/PenStrokes.swift \
+  Screendrop/UploadProgressReporter.swift \
   Screendrop/Engine/InkPath.swift \
   Screendrop/Engine/StrokeOptions.swift \
   Screendrop/Engine/StrokePipeline.swift \
