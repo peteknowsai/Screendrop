@@ -41,9 +41,13 @@ final class PreviewWindowCaptureExclusion {
     func ownsClick(atQuartz p: CGPoint) -> Bool {
         guard let primaryHeight = NSScreen.screens.first?.frame.height else { return false }
         let point = quartzToAppKit(p, primaryScreenHeight: primaryHeight)
-        return registeredWindows.allObjects.contains {
-            $0.isVisible && !$0.ignoresMouseEvents && $0.frame.contains(point)
-        }
+        let ours = registeredWindows.allObjects.filter { $0.isVisible && $0.frame.contains(point) }
+        guard !ours.isEmpty else { return false }
+        // Our Library behind the app being recorded doesn't own that app's clicks.
+        let hit = NSWindow.windowNumber(at: point, belowWindowWithWindowNumber: 0)
+        guard let top = ours.first(where: { $0.windowNumber == hit }) else { return false }
+        // The pen's click-through panel on top: what counts is what's under it.
+        return !top.ignoresMouseEvents || ours.contains { !$0.ignoresMouseEvents }
     }
 
     /// Applies a changed preference immediately to windows that already

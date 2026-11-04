@@ -21,6 +21,7 @@ nonisolated enum CloudFrameUploader {
         movie: URL,
         clicks: [Double],
         clickNumbers: [Int]? = nil,
+        isCurrent: @MainActor @Sendable () -> Bool = { true },
         creds: CloudCredentials
     ) async {
         let asset = AVURLAsset(url: movie)
@@ -62,8 +63,7 @@ nonisolated enum CloudFrameUploader {
             for (offset, frame) in batch.enumerated() {
                 let time = CMTime(seconds: min(frame.t, duration - 0.05), preferredTimescale: 600)
                 guard let image = try? await full.image(at: time).image,
-                      let jpeg = NSBitmapImageRep(cgImage: image)
-                          .representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { continue }
+                      let jpeg = encodeFrame(image) else { continue }
                 let field = "f\(start + offset)"
                 var entry: [String: Any] = ["t": frame.t, "field": field]
                 if let click = frame.click { entry["click"] = number(click) }
@@ -71,6 +71,7 @@ nonisolated enum CloudFrameUploader {
                 files.append((field, "\(field).jpg", "image/jpeg", jpeg))
             }
             guard !index.isEmpty, let json = try? JSONSerialization.data(withJSONObject: index) else { continue }
+            guard await isCurrent() else { return }
             do {
                 try await CloudSidecarUploader.postForm(
                     path: "/api/assets/\(id)/frames",
@@ -79,10 +80,23 @@ nonisolated enum CloudFrameUploader {
                     creds: creds
                 )
             } catch {
+                // One bad batch shouldn't cost the rest of the take.
                 print("Frame upload failed for \(id): \(error)")
-                return
             }
         }
+    }
+
+    /// The worker takes frames up to 1 MB; a busy screen gets a second,
+    /// rougher pass before it's left out.
+    static let maxFrameBytes = 1024 * 1024
+
+    private static func encodeFrame(_ image: CGImage) -> Data? {
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        for quality in [0.7, 0.4] {
+            if let data = bitmap.representation(using: .jpeg, properties: [.compressionFactor: quality]),
+               data.count <= maxFrameBytes { return data }
+        }
+        return nil
     }
 
     /// The image squeezed into 32×18 grey cells.

@@ -190,6 +190,11 @@ final class CaptureCoordinator {
 
     /// Opens the recorder with Claude Code mode on; Task 32 adds the mode.
     func recordForClaude() {
+        // Camera only would override the mode at Record: start from the screen.
+        let key = ScreendropPreferences.recordingSourceModeKey
+        if UserDefaults.standard.string(forKey: key) == RecordingSourceMode.cameraOnly.rawValue {
+            UserDefaults.standard.set(RecordingSourceMode.display.rawValue, forKey: key)
+        }
         openRecorder(intent: .claude)
     }
 
@@ -205,14 +210,15 @@ final class CaptureCoordinator {
             // The first screen is always the main display, the one with the menu bar.
             guard let screen = NSScreen.screens.first,
                   let content = try? await ScreenRecordingCapture.availableContent(),
-                  let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() })
+                  let display = content.displays.first(where: { $0.displayID == CGMainDisplayID() }),
+                  // Another entry point may have started a take while this waited.
+                  !ScreenRecordingManager.shared.isActive
             else { return }
             let frame = screen.frame
             let size = CGSize(width: min(1280, frame.width), height: min(720, frame.height))
             let rect = CGRect(x: frame.midX - size.width / 2, y: frame.midY - size.height / 2,
                               width: size.width, height: size.height)
-            ScreenRecordingManager.shared.sourceIntent = .cameraOnly
-            recordArea(display, rect: rect)
+            recordArea(display, rect: rect, intent: .cameraOnly)
         }
     }
 
@@ -246,12 +252,15 @@ final class CaptureCoordinator {
 
     /// - Parameter rect: global AppKit coordinates, picked with
     ///   RecordingAreaSelectionPresenter.
-    func recordArea(_ display: SCDisplay, rect: CGRect) {
+    /// `intent`, when given, applies only once the countdown has run, so an
+    /// Esc on it leaves the next take as it was.
+    func recordArea(_ display: SCDisplay, rect: CGRect, intent: RecordingSourceIntent? = nil) {
         Task {
             guard await CaptureCountdownPresenter.shared.runIfNeeded(
                 seconds: ScreendropPreferences.recordingStartDelaySeconds,
                 displayID: display.displayID
             ) else { return }
+            if let intent { ScreenRecordingManager.shared.sourceIntent = intent }
             ScreenRecordingManager.shared.startRecording(
                 source: ScreenRecordingSource(kind: .area(display: display, rect: rect))
             )

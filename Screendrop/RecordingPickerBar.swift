@@ -189,6 +189,8 @@ struct RecordingPickerControls: View {
             area.begin()
         case .cameraOnly:
             cancelPicking()
+            // Camera only is a face; Claude Code mode is a screen with none.
+            if recorder.sourceIntent == .claude { recorder.sourceIntent = .screen }
             if cameraID.isEmpty, let camera = cameras.first { selectCamera(camera.uniqueID) }
         }
     }
@@ -358,6 +360,13 @@ struct RecordingPickerControls: View {
                 : "Claude Code mode off - click to record for Claude Code"
         ) {
             recorder.sourceIntent = isOn ? .screen : .claude
+            if isOn {
+                RecordingBarPresenter.shared.warmCameraPreviewIfEnabled()
+            } else {
+                // Claude Code mode records the screen with no camera.
+                if sourceMode == .cameraOnly { select(.display) }
+                Task { await CameraRecordingManager.shared.stopPreview() }
+            }
         }
     }
 

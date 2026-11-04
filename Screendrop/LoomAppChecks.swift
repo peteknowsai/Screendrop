@@ -25,6 +25,7 @@ enum LoomAppChecks {
         checkLoomEditDocument()
         checkClaudeLog()
         checkCloudID()
+        checkUploadPrivacy()
         print("loom app checks passed")
         exit(0)
     }
@@ -38,6 +39,15 @@ enum LoomAppChecks {
         precondition(id == "7f3e91c2", "a share link's id read as \(id ?? "nil")")
         precondition(cloudID(fromURL: "https://x.workers.dev/library") == nil, "the library page read as a link")
         precondition(cloudID(fromURL: nil) == nil, "no link read as one")
+    }
+
+    static func checkUploadPrivacy() {
+        let claude = CloudUploader.uploadPrivacy(isVideo: true, existingID: nil, claudeTake: true, stored: "link")
+        precondition(claude == "private", "a Claude Code take whose reserve failed went up as \(claude ?? "nil")")
+        let plain = CloudUploader.uploadPrivacy(isVideo: true, existingID: nil, claudeTake: false, stored: "link")
+        precondition(plain == "link", "a plain take ignored the ready bar's lock")
+        let reserved = CloudUploader.uploadPrivacy(isVideo: true, existingID: "7f3e91c2", claudeTake: true, stored: "link")
+        precondition(reserved == nil, "an upload behind a reserved link overrode its privacy")
     }
 
     static func checkClaudeLog() {

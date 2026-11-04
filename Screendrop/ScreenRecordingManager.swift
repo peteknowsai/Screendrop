@@ -196,8 +196,12 @@ final class ScreenRecordingManager {
         Task {
             do {
                 var requestedOptions = ScreenRecordingCaptureOptions.fromPreferences()
-                // Claude Code reads the screen; a face would only cover it.
-                if sourceIntent == .claude { requestedOptions.cameraDeviceID = nil }
+                // Claude Code reads the screen; a face would only cover it,
+                // so the ready bar's warm preview goes off too.
+                if sourceIntent == .claude {
+                    requestedOptions.cameraDeviceID = nil
+                    await CameraRecordingManager.shared.stopPreview()
+                }
                 let (options, inputWarnings) = await Self.resolveCaptureOptions(requestedOptions)
                 guard state == .starting, !isStopping else { return }
 
@@ -237,6 +241,8 @@ final class ScreenRecordingManager {
                     includesSystemAudio: options.capturesSystemAudio,
                     includesMicrophone: options.microphoneDeviceID != nil
                 )
+                // Setup clears the writer's mute; a mute pressed while starting holds.
+                writer.setMicrophoneMuted(isMicMuted)
 
                 capture.onVideoFrame = { [writer, pointerActivityRecorder] sampleBuffer in
                     pointerActivityRecorder.recordFrameGeometry(sampleBuffer)
@@ -313,17 +319,19 @@ final class ScreenRecordingManager {
                 elapsedTime = 0
                 state = .recording
                 reserveLinkIfNeeded()
+                let overlayDisplayID = target.displayID
+                    ?? ActiveDisplayResolver.displayID(forQuartzRect: target.inputMapping.captureRect)
                 if sourceIntent == .claude {
                     ClaudeCodeRecorder.shared.begin(
                         captureRect: target.inputMapping.captureRect,
-                        displayID: target.displayID
+                        displayID: overlayDisplayID
                     )
                 }
                 // The last take's card would only be in the way now.
                 RecordingLinkCardPresenter.shared.hide()
                 if sourceIntent != .cameraOnly {
                     PenOverlayController.shared.begin(
-                        displayID: target.displayID,
+                        displayID: overlayDisplayID,
                         captureRect: Self.quartzRect(fromAppKitRect: target.inputMapping.captureRect)
                     )
                 }
@@ -690,6 +698,15 @@ final class ScreenRecordingManager {
         pointerActivityRecorder.stop()
         if let session {
             RecordingSessionStore.deleteSession(session)
+        }
+        // A link kept through Restart belongs to a take that never came.
+        if let reservation = linkReservation {
+            linkReservation = nil
+            Task {
+                if let link = await reservation.value {
+                    try? await CloudUploader.shared.deleteFromCloud(uploadID: link.id)
+                }
+            }
         }
         cleanupAfterRecording()
         errorMessage = "Failed to start screen recording: \(error.localizedDescription)"

@@ -74,7 +74,8 @@ final class CloudUploader: NSObject {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
             "mediaType": mediaType, "privacy": privacy, "sourceMode": sourceMode,
-        ])
+            "socialEnabled": CloudUploadPreferences.lastSocialEnabled,
+        ] as [String: Any])
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw CloudUploadError.invalidResponse }
         guard http.statusCode == 201 else {
@@ -85,6 +86,13 @@ final class CloudUploader: NSObject {
             throw CloudUploadError.invalidResponse
         }
         return CloudUploadResult(id: id, url: link, filename: "", size: 0)
+    }
+
+    /// X-Privacy for an upload: none behind an existing link, which keeps
+    /// its own; only you for a take recorded for Claude Code.
+    nonisolated static func uploadPrivacy(isVideo: Bool, existingID: String?, claudeTake: Bool, stored: String) -> String? {
+        guard isVideo, existingID == nil else { return nil }
+        return claudeTake ? "private" : stored
     }
 
     /// `existingID` puts the file behind a link that already exists;
@@ -180,8 +188,14 @@ final class CloudUploader: NSObject {
         uploadingItems.insert(itemID)
         uploadProgress[itemID] = rendersFirst ? 0.5 : 0
         let uploadBase = rendersFirst ? 0.5 : 0
-        // The ready bar's lock; a reserved link already has its privacy.
-        let privacy = isVideo && existingID == nil ? RecordingPrivacyChoice.stored().apiValue : nil
+        // The ready bar's lock; a reserved link already has its privacy. A
+        // take for Claude Code starts as only you even when its reserve failed.
+        let claudeTake = isVideo && rendersFirst
+            && RecordingSession(directoryURL: sessionDirectory).loadClaudeLog() != nil
+        let privacy = Self.uploadPrivacy(
+            isVideo: isVideo, existingID: existingID, claudeTake: claudeTake,
+            stored: RecordingPrivacyChoice.stored().apiValue
+        )
 
         let uploadTask = Task { [weak self] () throws -> CloudUploadResult in
             let result = try await Self.streamUpload(
@@ -196,6 +210,7 @@ final class CloudUploader: NSObject {
                 socialEnabled: socialEnabled,
                 existingID: existingID,
                 privacy: privacy,
+                sourceMode: claudeTake && existingID == nil ? "claude" : nil,
                 creds: creds,
                 progress: { [weak self] fraction in
                     Task { @MainActor [weak self] in
@@ -228,7 +243,8 @@ final class CloudUploader: NSObject {
             uploadedURLs[itemID] = result.url
             if isVideo {
                 scheduleSidecarUpload(
-                    uploadID: result.id, fileURL: fileURL, title: title, keepsTitle: keepsTitle, creds: creds
+                    uploadID: result.id, generation: generation, fileURL: fileURL,
+                    title: title, keepsTitle: keepsTitle, creds: creds
                 )
             } else {
                 scheduleSearchText(uploadID: result.id, fileURL: fileURL, creds: creds)
@@ -255,6 +271,7 @@ final class CloudUploader: NSObject {
     /// already usable, sidecars enrich the page when they land.
     private func scheduleSidecarUpload(
         uploadID: String,
+        generation: Int,
         fileURL: URL,
         title: String?,
         keepsTitle: Bool,
@@ -265,6 +282,17 @@ final class CloudUploader: NSObject {
         }
         let sessionDirectory = item?.recordingSession?.directoryURL
         let createdAt = item?.createdAt ?? Date()
+        // A Studio update to the same link makes these sidecars stale: the
+        // transcript and frames would describe the cut it replaced.
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            (self?.cloudIDGeneration[uploadID] ?? 0) == generation
+        }
+        // Editing in Studio drops this render; a hard link keeps its bytes
+        // for the poster and frames until they're sent.
+        let pinned = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sidecar-\(UUID().uuidString)")
+            .appendingPathExtension(fileURL.pathExtension)
+        let movieURL = (try? FileManager.default.linkItem(at: fileURL, to: pinned)) != nil ? pinned : nil
         Task.detached(priority: .utility) {
             await CloudSidecarUploader.uploadVideoSidecars(
                 uploadID: uploadID,
@@ -273,8 +301,11 @@ final class CloudUploader: NSObject {
                 createdAt: createdAt,
                 customTitle: title,
                 keepsTitle: keepsTitle,
+                isCurrent: isCurrent,
+                movieURL: movieURL,
                 creds: creds
             )
+            if let movieURL { try? FileManager.default.removeItem(at: movieURL) }
         }
     }
 
@@ -385,6 +416,7 @@ final class CloudUploader: NSObject {
         socialEnabled: Bool,
         existingID: String?,
         privacy: String?,
+        sourceMode: String?,
         creds: CloudCredentials,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> CloudUploadResult {
@@ -414,6 +446,7 @@ final class CloudUploader: NSObject {
         // Multipart copies these headers onto its create and part requests.
         if let existingID { request.setValue(existingID, forHTTPHeaderField: "X-Upload-Id") }
         if let privacy { request.setValue(privacy, forHTTPHeaderField: "X-Privacy") }
+        if let sourceMode { request.setValue(sourceMode, forHTTPHeaderField: "X-Source-Mode") }
 
         let progressDelegate = UploadProgressDelegate { sent, expected in
             guard expected > 0 else { return }

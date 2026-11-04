@@ -205,9 +205,10 @@ final class RecordingBarPresenter {
     /// appearance. Reading the camera preference here - on every real
     /// `showPicker()` - is what makes a camera left on from a previous
     /// session warm up immediately instead of needing an off/on toggle.
-    private func warmCameraPreviewIfEnabled() {
+    func warmCameraPreviewIfEnabled() {
         let cameraID = ScreendropPreferences.recordingCameraDeviceID
-        guard !cameraID.isEmpty else { return }
+        // A take for Claude Code records no camera, so none lights up.
+        guard !cameraID.isEmpty, ScreenRecordingManager.shared.sourceIntent != .claude else { return }
         let displayID = ActiveDisplayResolver.activeDisplayID(preferPointer: false)
         Task {
             await CameraRecordingManager.shared.startPreview(deviceID: cameraID, displayID: displayID)

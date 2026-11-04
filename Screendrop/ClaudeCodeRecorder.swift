@@ -197,10 +197,12 @@ final class ClaudeCodeRecorder {
         var window: CFTypeRef?
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &window) == .success,
               let window, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
+        let windowElement = unsafeDowncast(window, to: AXUIElement.self)
+        // The timeout is per element; the window doesn't inherit the app's.
+        AXUIElementSetMessagingTimeout(windowElement, 0.25)
         var document: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            unsafeDowncast(window, to: AXUIElement.self), kAXDocumentAttribute as CFString, &document
-        ) == .success else { return nil }
+        guard AXUIElementCopyAttributeValue(windowElement, kAXDocumentAttribute as CFString, &document) == .success
+        else { return nil }
         return document as? String
     }
 

@@ -68,7 +68,7 @@ struct CloudUploadOptionsPopover: View {
             confirmTitle: isUpdate ? "Update video" : "Upload",
             onCancel: { dismiss() },
             onConfirm: {
-                CloudUploadPreferences.lastSocialEnabled = socialEnabled
+                if !isUpdate { CloudUploadPreferences.lastSocialEnabled = socialEnabled }
                 let options = CloudUploadOptions(title: title, socialEnabled: socialEnabled)
                 dismiss()
                 onConfirm(options)
@@ -83,7 +83,10 @@ struct CloudUploadOptionsPopover: View {
                         .inspectorTextField()
                 }
 
-                InspectorToggleRow("Allow comments & likes", isOn: $socialEnabled)
+                // An update keeps the link's own settings; change them on the web.
+                if !isUpdate {
+                    InspectorToggleRow("Allow comments & likes", isOn: $socialEnabled)
+                }
             }
         }
     }

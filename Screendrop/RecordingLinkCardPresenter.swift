@@ -48,8 +48,16 @@ final class RecordingLinkCardModel {
         NSWorkspace.shared.open(url)
     }
 
+    /// History swaps the screen master for the rendered take once it exists;
+    /// the card follows, so Preview and Delete act on what was shared.
+    private var currentURL: URL {
+        guard let session = RecordingDeliverable.session(for: fileURL) else { return fileURL }
+        let path = session.directoryURL.standardizedFileURL.path
+        return ScreenshotHistoryStore.shared.items.first { $0.recordingSessionPath == path }?.url ?? fileURL
+    }
+
     func preview() {
-        QuickLookPreviewPresenter.show(url: fileURL)
+        QuickLookPreviewPresenter.show(url: currentURL)
     }
 
     /// The card's main copy: the ask for a Claude Code take, else the link.
@@ -122,7 +130,7 @@ final class RecordingLinkCardModel {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
         CloudUploader.shared.cancelUpload(for: itemID)
-        _ = ScreenshotHistoryStore.shared.delete(url: fileURL)
+        _ = ScreenshotHistoryStore.shared.delete(url: currentURL)
         let id = cloudID
         Task { try? await CloudUploader.shared.deleteFromCloud(uploadID: id) }
         RecordingLinkCardPresenter.shared.hide()

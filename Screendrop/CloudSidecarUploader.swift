@@ -45,8 +45,13 @@ nonisolated enum CloudSidecarUploader {
         createdAt: Date,
         customTitle: String? = nil,
         keepsTitle: Bool = false,
+        isCurrent: @MainActor @Sendable () -> Bool = { true },
+        movieURL: URL? = nil,
         creds: CloudCredentials
     ) async {
+        // `uploadedFileURL` says which cut went up; `movieURL`, a hard link
+        // to it, is what's read, since Studio may drop that render meanwhile.
+        let movie = movieURL ?? uploadedFileURL
         var fields: [(name: String, value: String)] = []
         var files: [(name: String, filename: String, contentType: String, data: Data)] = []
 
@@ -57,17 +62,18 @@ nonisolated enum CloudSidecarUploader {
             fields.append(("title", defaultTitle(for: createdAt)))
         }
 
-        if let poster = await posterFrame(for: uploadedFileURL) {
+        if let poster = await posterFrame(for: movie) {
             files.append(("poster", "poster.jpg", "image/jpeg", poster))
         }
 
-        if let storyboard = await storyboard(for: uploadedFileURL) {
+        if let storyboard = await storyboard(for: movie) {
             files.append(("storyboard", "storyboard.jpg", "image/jpeg", storyboard.imageData))
             fields.append(("storyboard_meta", storyboard.metaJSON))
         }
 
         // Title, poster and storyboard go first: they're quick, and the
         // share page wants them before a transcription pass could finish.
+        guard await isCurrent() else { return }
         do {
             try await postAssets(
                 uploadID: uploadID,
@@ -85,6 +91,7 @@ nonisolated enum CloudSidecarUploader {
                uploadedFileURL: uploadedFileURL
            ),
            let encoded = try? JSONEncoder().encode(transcript) {
+            guard await isCurrent() else { return }
             do {
                 try await postAssets(
                     uploadID: uploadID,
@@ -103,6 +110,7 @@ nonisolated enum CloudSidecarUploader {
         if let sessionDirectory {
             log = claudeLog(sessionDirectory: sessionDirectory, uploadedFileURL: uploadedFileURL)
             if let log, let encoded = try? JSONEncoder().encode(log) {
+                guard await isCurrent() else { return }
                 do {
                     try await postAssets(
                         uploadID: uploadID,
@@ -120,16 +128,18 @@ nonisolated enum CloudSidecarUploader {
         if let log {
             await CloudFrameUploader.upload(
                 id: uploadID,
-                movie: uploadedFileURL,
+                movie: movie,
                 clicks: log.clicks.map(\.t),
                 clickNumbers: log.clicks.map(\.n),
+                isCurrent: isCurrent,
                 creds: creds
             )
         } else {
             await CloudFrameUploader.upload(
                 id: uploadID,
-                movie: uploadedFileURL,
+                movie: movie,
                 clicks: sessionDirectory.map { clickTimes(sessionDirectory: $0, uploadedFileURL: uploadedFileURL) } ?? [],
+                isCurrent: isCurrent,
                 creds: creds
             )
         }

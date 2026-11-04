@@ -3634,6 +3634,11 @@ final class RecordingStudioModel {
                     result = try await upload(into: nil)
                 }
                 self.sharedLinkID = result.id
+                // So the shelf, and this package reopened later, update this link too.
+                session?.updateProjectMetadata {
+                    $0.cloudID = result.id
+                    $0.cloudURL = result.url
+                }
 
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(result.url, forType: .string)
