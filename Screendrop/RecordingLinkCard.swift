@@ -9,7 +9,12 @@
 import SwiftUI
 
 struct RecordingLinkCard: View {
-    static let size = CGSize(width: 300, height: 196)
+    /// A Claude Code take's card is taller, for the ask.
+    static func size(hasAsk: Bool) -> CGSize {
+        CGSize(width: 300, height: hasAsk ? 246 : 196)
+    }
+
+    private var size: CGSize { Self.size(hasAsk: model.ask != nil) }
 
     let model: RecordingLinkCardModel
     let onClose: () -> Void
@@ -25,19 +30,28 @@ struct RecordingLinkCard: View {
                     Spacer()
                     privacyMenu
                 }
-                status
-                    .padding(.horizontal, 4)
-                    .padding(.top, 16)
+                if let ask = model.ask {
+                    askBox(ask)
+                        .padding(.top, 10)
+                } else {
+                    status
+                        .padding(.horizontal, 4)
+                        .padding(.top, 16)
+                }
                 Spacer(minLength: 0)
                 Grid(horizontalSpacing: 8, verticalSpacing: 8) {
                     GridRow {
                         GlassChip(title: "Open", systemImage: "arrow.up.right.square", action: model.open)
-                        GlassChip(title: "Preview", systemImage: "play.fill", action: model.preview)
+                        if model.ask != nil {
+                            GlassChip(title: "Copy link", systemImage: "link", action: model.copyLink)
+                        } else {
+                            GlassChip(title: "Preview", systemImage: "play.fill", action: model.preview)
+                        }
                     }
                     GridRow {
                         GlassChip(
-                            title: showsCopied ? "Copied" : "Copy link",
-                            systemImage: showsCopied ? "checkmark" : "link",
+                            title: copyTitle,
+                            systemImage: showsCopied ? "checkmark" : model.ask != nil ? "terminal" : "link",
                             action: model.copy
                         )
                         moreMenu
@@ -46,7 +60,7 @@ struct RecordingLinkCard: View {
             }
             .padding(14)
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(width: size.width, height: size.height)
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .shadow(color: .black.opacity(0.32), radius: 20, y: 14)
         .task(id: model.copies) {
@@ -63,13 +77,43 @@ struct RecordingLinkCard: View {
                 Image(nsImage: thumbnail)
                     .resizable()
                     .scaledToFill()
-                    .frame(width: Self.size.width + 20, height: Self.size.height + 20)
+                    .frame(width: size.width + 20, height: size.height + 20)
                     .blur(radius: 8)
                     .brightness(-0.3)
             }
         }
-        .frame(width: Self.size.width, height: Self.size.height)
+        .frame(width: size.width, height: size.height)
         .clipped()
+    }
+
+    private var copyTitle: String {
+        switch (model.ask != nil, showsCopied) {
+        case (true, true): "Copied ask"
+        case (true, false): "Copy ask"
+        case (false, true): "Copied"
+        case (false, false): "Copy link"
+        }
+    }
+
+    /// What went to the clipboard for Claude Code, and the upload under it.
+    private func askBox(_ ask: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Copied for Claude Code")
+                .font(.system(size: 12, weight: .semibold))
+            Text(ask)
+                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                .foregroundStyle(Color(red: 0xE8 / 255, green: 0xE9 / 255, blue: 0xEC / 255))
+                .lineLimit(3)
+                .textSelection(.enabled)
+            if model.failed || model.progress != nil {
+                status.padding(.top, 4)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 11)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.black.opacity(0.5), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     @ViewBuilder

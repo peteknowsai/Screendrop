@@ -129,7 +129,12 @@ struct ScreendropApp: App {
                     let itemID = CaptureShelf.shared.addLinkedVideo(url: historyURL, cloudID: cloudID)
                     if AfterCaptureActions.isEnabled(.showOverlay, for: .recording) {
                         RecordingLinkCardPresenter.shared.show(
-                            fileURL: historyURL, link: link, cloudID: cloudID, itemID: itemID, displayID: displayID
+                            fileURL: historyURL,
+                            link: link,
+                            cloudID: cloudID,
+                            itemID: itemID,
+                            ask: session.loadClaudeLog() != nil ? ClaudeCodeLog.ask(url: link) : nil,
+                            displayID: displayID
                         )
                     }
                     return

@@ -17,16 +17,21 @@ final class RecordingLinkCardModel {
     let link: String
     let cloudID: String
     let itemID: UUID
-    var privacy = RecordingPrivacyChoice.stored()
+    /// A take for Claude Code: what was copied for it.
+    let ask: String?
+    var privacy: RecordingPrivacyChoice
     var thumbnail: NSImage?
     /// Bumped on every copy so the "Copied" label restarts its 3 s.
     var copies = 1
 
-    init(fileURL: URL, link: String, cloudID: String, itemID: UUID) {
+    init(fileURL: URL, link: String, cloudID: String, itemID: UUID, ask: String?) {
         self.fileURL = fileURL
         self.link = link
         self.cloudID = cloudID
         self.itemID = itemID
+        self.ask = ask
+        // Takes for Claude Code start as only you.
+        privacy = ask != nil ? .onlyYou : RecordingPrivacyChoice.stored()
     }
 
     /// 0...1 while rendering or uploading, nil otherwise.
@@ -47,10 +52,17 @@ final class RecordingLinkCardModel {
         QuickLookPreviewPresenter.show(url: fileURL)
     }
 
+    /// The card's main copy: the ask for a Claude Code take, else the link.
     func copy() {
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(link, forType: .string)
+        NSPasteboard.general.setString(ask ?? link, forType: .string)
         copies += 1
+        RecordingLinkCardPresenter.shared.toast(ask != nil ? "Copied for Claude Code" : "Link copied")
+    }
+
+    func copyLink() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(link, forType: .string)
         RecordingLinkCardPresenter.shared.toast("Link copied")
     }
 
@@ -132,18 +144,26 @@ final class RecordingLinkCardPresenter {
 
     private init() {}
 
-    func show(fileURL: URL, link: String, cloudID: String, itemID: UUID, displayID: CGDirectDisplayID?) {
+    func show(
+        fileURL: URL,
+        link: String,
+        cloudID: String,
+        itemID: UUID,
+        ask: String? = nil,
+        displayID: CGDirectDisplayID?
+    ) {
         hide()
         guard let screen = ActiveDisplayResolver.screen(for: displayID) ?? NSScreen.main else { return }
         self.screen = screen
-        let model = RecordingLinkCardModel(fileURL: fileURL, link: link, cloudID: cloudID, itemID: itemID)
+        let model = RecordingLinkCardModel(fileURL: fileURL, link: link, cloudID: cloudID, itemID: itemID, ask: ask)
+        let cardSize = RecordingLinkCard.size(hasAsk: ask != nil)
         Task {
             model.thumbnail = await VideoPreviewImageLoader.thumbnail(at: fileURL, maxPixelSize: 640)
         }
 
         let size = CGSize(
-            width: RecordingLinkCard.size.width + Self.shadowRoom * 2,
-            height: RecordingLinkCard.size.height + Self.shadowRoom * 2
+            width: cardSize.width + Self.shadowRoom * 2,
+            height: cardSize.height + Self.shadowRoom * 2
         )
         let panel = Self.makePanel(size: size)
         let hosting = NSHostingView(rootView: RecordingLinkCard(model: model, onClose: { [weak self] in self?.hide() })
@@ -161,7 +181,7 @@ final class RecordingLinkCardPresenter {
         ))
         panel.orderFrontRegardless()
         self.panel = panel
-        toast("Link copied")
+        toast(ask != nil ? "Copied for Claude Code" : "Link copied")
     }
 
     func hide() {

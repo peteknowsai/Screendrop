@@ -14,8 +14,15 @@ import AppKit
 nonisolated enum CloudFrameUploader {
     private static let batchSize = 100
 
-    /// `clicks` are seconds on the uploaded video's own timeline.
-    static func upload(id: String, movie: URL, clicks: [Double], creds: CloudCredentials) async {
+    /// `clicks` are seconds on the uploaded video's own timeline;
+    /// `clickNumbers`, when given, are their numbers in the Claude Code log.
+    static func upload(
+        id: String,
+        movie: URL,
+        clicks: [Double],
+        clickNumbers: [Int]? = nil,
+        creds: CloudCredentials
+    ) async {
         let asset = AVURLAsset(url: movie)
         guard let duration = try? await asset.load(.duration).seconds, duration.isFinite, duration > 0 else { return }
 
@@ -32,7 +39,12 @@ nonisolated enum CloudFrameUploader {
             thumbs.append(Thumb(t: result.requestedTime.seconds, luma: luma))
         }
         thumbs.sort { $0.t < $1.t }
-        let picked = pickFrames(thumbs, clicks: clicks.filter { $0 >= 0 && $0 < duration })
+        let kept = clicks.indices.filter { clicks[$0] >= 0 && clicks[$0] < duration }
+        let picked = pickFrames(thumbs, clicks: kept.map { clicks[$0] })
+        func number(_ click: Int) -> Int {
+            let original = kept[click - 1]
+            return clickNumbers?[original] ?? original + 1
+        }
         guard !picked.isEmpty else { return }
 
         let full = AVAssetImageGenerator(asset: asset)
@@ -54,7 +66,7 @@ nonisolated enum CloudFrameUploader {
                           .representation(using: .jpeg, properties: [.compressionFactor: 0.7]) else { continue }
                 let field = "f\(start + offset)"
                 var entry: [String: Any] = ["t": frame.t, "field": field]
-                if let click = frame.click { entry["click"] = click }
+                if let click = frame.click { entry["click"] = number(click) }
                 index.append(entry)
                 files.append((field, "\(field).jpg", "image/jpeg", jpeg))
             }

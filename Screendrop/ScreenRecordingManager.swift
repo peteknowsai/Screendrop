@@ -195,7 +195,9 @@ final class ScreenRecordingManager {
 
         Task {
             do {
-                let requestedOptions = ScreenRecordingCaptureOptions.fromPreferences()
+                var requestedOptions = ScreenRecordingCaptureOptions.fromPreferences()
+                // Claude Code reads the screen; a face would only cover it.
+                if sourceIntent == .claude { requestedOptions.cameraDeviceID = nil }
                 let (options, inputWarnings) = await Self.resolveCaptureOptions(requestedOptions)
                 guard state == .starting, !isStopping else { return }
 
@@ -311,6 +313,12 @@ final class ScreenRecordingManager {
                 elapsedTime = 0
                 state = .recording
                 reserveLinkIfNeeded()
+                if sourceIntent == .claude {
+                    ClaudeCodeRecorder.shared.begin(
+                        captureRect: target.inputMapping.captureRect,
+                        displayID: target.displayID
+                    )
+                }
                 // The last take's card would only be in the way now.
                 RecordingLinkCardPresenter.shared.hide()
                 if sourceIntent != .cameraOnly {
@@ -448,7 +456,9 @@ final class ScreenRecordingManager {
         session.writeProjectMetadata(metadata)
         guard copies else { return }
         NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(link.url, forType: .string)
+        // For Claude Code, the whole ask is what gets pasted.
+        let text = session.loadClaudeLog() != nil ? ClaudeCodeLog.ask(url: link.url) : link.url
+        NSPasteboard.general.setString(text, forType: .string)
     }
 
     private func finalizeSession(
@@ -499,7 +509,22 @@ final class ScreenRecordingManager {
                 )
             }
             if action == .preview || action == .terminate {
-                writeStartingEdit(to: session, hasCamera: cameraResult != nil, intent: restartIntent)
+                var numbersAndPins: [RecordingTextOverlay] = []
+                if restartIntent == .claude {
+                    let log = ClaudeCodeRecorder.shared.finish()
+                    numbersAndPins = log.textOverlays()
+                    do {
+                        try session.writeClaudeLog(log)
+                    } catch {
+                        NSLog("[Screendrop] Failed to save the Claude Code log: \(error)")
+                    }
+                }
+                writeStartingEdit(
+                    to: session,
+                    hasCamera: cameraResult != nil,
+                    intent: restartIntent,
+                    textOverlays: numbersAndPins
+                )
                 if let link { keepLink(link, in: session, copies: action == .preview) }
             }
         }
@@ -572,7 +597,12 @@ final class ScreenRecordingManager {
 
     /// Loom's plain look for the take, with the bubble where it was. A
     /// failure only costs the take its plain look; Studio's defaults apply.
-    private func writeStartingEdit(to session: RecordingSession, hasCamera: Bool, intent: RecordingSourceIntent) {
+    private func writeStartingEdit(
+        to session: RecordingSession,
+        hasCamera: Bool,
+        intent: RecordingSourceIntent,
+        textOverlays: [RecordingTextOverlay] = []
+    ) {
         let scale = max(manifest.pixelScale, 1)
         let camera = CameraRecordingManager.shared
         let captureSize = CGSize(
@@ -588,7 +618,8 @@ final class ScreenRecordingManager {
             highlightClicks: ScreendropPreferences.recordingHighlightClicks,
             resolution: ScreendropPreferences.recordingUploadResolution,
             intent: intent,
-            imageOverlays: penOverlays(in: session, captureSize: captureSize)
+            imageOverlays: penOverlays(in: session, captureSize: captureSize),
+            textOverlays: textOverlays
         ))
         do {
             try session.writeStartingDocument(document)
@@ -839,6 +870,7 @@ final class ScreenRecordingManager {
         RecordingPausedToast.shared.hide()
         CameraBubblePanel.shared.isPaused = false
         PenOverlayController.shared.end()
+        ClaudeCodeRecorder.shared.end()
         endActivity()
         if finishAction != .restart {
             RecordingWallpaper.restore()

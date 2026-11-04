@@ -36,6 +36,7 @@ struct RecordingSessionControls: View {
 
     @State private var manager = ScreenRecordingManager.shared
     @State private var pen = PenOverlayController.shared
+    @State private var claude = ClaudeCodeRecorder.shared
     @AppStorage(ScreendropPreferences.recordingTeleprompterScriptKey) private var script = ""
 
     private var isPaused: Bool {
@@ -103,15 +104,30 @@ struct RecordingSessionControls: View {
 
             BarDivider()
 
-            BarActionButton(
-                id: .teleprompter,
-                title: "Speaker notes",
-                systemImage: "note.text",
-                accessibility: "Show or hide your speaker notes"
-            ) {
-                TeleprompterController.shared.toggleOverlay(displayID: manager.displayID)
+            if manager.sourceIntent == .claude {
+                // Point stands in for speaker notes when Claude Code is watching.
+                BarActionButton(
+                    id: .point,
+                    title: claude.isPointing ? "Cancel Point" : "Point at something",
+                    systemImage: "scope",
+                    tint: claude.isPointing ? RecordingPickerControls.claudeTint : BarMetrics.activeTint,
+                    isSelected: claude.isPointing,
+                    accessibility: "Point: click a spot on screen and label it for Claude Code"
+                ) {
+                    claude.togglePointing()
+                }
+                .disabled(isPaused || isSettling)
+            } else {
+                BarActionButton(
+                    id: .teleprompter,
+                    title: "Speaker notes",
+                    systemImage: "note.text",
+                    accessibility: "Show or hide your speaker notes"
+                ) {
+                    TeleprompterController.shared.toggleOverlay(displayID: manager.displayID)
+                }
+                .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
             if pen.isAvailable {
                 BarActionButton(

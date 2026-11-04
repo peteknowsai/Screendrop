@@ -92,13 +92,53 @@ nonisolated enum CloudSidecarUploader {
             }
         }
 
-        // Stills for Claude Code's get_frames.
-        await CloudFrameUploader.upload(
-            id: uploadID,
-            movie: uploadedFileURL,
-            clicks: sessionDirectory.map { clickTimes(sessionDirectory: $0, uploadedFileURL: uploadedFileURL) } ?? [],
-            creds: creds
-        )
+        // A take for Claude Code: its log, on the uploaded video's clock.
+        // Read from the session, so a Studio update sends it again.
+        var log: ClaudeCodeLog?
+        if let sessionDirectory {
+            log = claudeLog(sessionDirectory: sessionDirectory, uploadedFileURL: uploadedFileURL)
+            if let log, let encoded = try? JSONEncoder().encode(log) {
+                do {
+                    try await postAssets(
+                        uploadID: uploadID,
+                        fields: [("events", String(decoding: encoded, as: UTF8.self))],
+                        files: [],
+                        creds: creds
+                    )
+                } catch {
+                    print("Claude Code log upload failed for \(uploadID): \(error)")
+                }
+            }
+        }
+
+        // Stills for Claude Code's get_frames, one at each logged click.
+        if let log {
+            await CloudFrameUploader.upload(
+                id: uploadID,
+                movie: uploadedFileURL,
+                clicks: log.clicks.map(\.t),
+                clickNumbers: log.clicks.map(\.n),
+                creds: creds
+            )
+        } else {
+            await CloudFrameUploader.upload(
+                id: uploadID,
+                movie: uploadedFileURL,
+                clicks: sessionDirectory.map { clickTimes(sessionDirectory: $0, uploadedFileURL: uploadedFileURL) } ?? [],
+                creds: creds
+            )
+        }
+    }
+
+    /// The session's Claude Code log, remapped through the clip timeline
+    /// when the final cut is what went up.
+    private static func claudeLog(sessionDirectory: URL, uploadedFileURL: URL) -> ClaudeCodeLog? {
+        let session = RecordingSession(directoryURL: sessionDirectory)
+        guard let log = session.loadClaudeLog() else { return nil }
+        guard uploadedFileURL.standardizedFileURL == session.finalURL.standardizedFileURL,
+              let clips = session.effectiveEditDocument()?.clips, !clips.isEmpty else { return log }
+        let timeline = RecordingClipTimeline(segments: clips)
+        return log.remapped { timeline.editorTime(forSourceTime: $0) }
     }
 
     /// A screenshot's recognized text, so search and Claude Code can find it.

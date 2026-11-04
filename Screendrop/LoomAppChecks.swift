@@ -23,12 +23,51 @@ enum LoomAppChecks {
     @MainActor
     static func run() -> Never {
         checkLoomEditDocument()
+        checkClaudeLog()
         print("loom app checks passed")
         exit(0)
     }
 
     /// A new recording renders plain, with the camera where the bubble was.
     @MainActor
+    /// The Claude Code log: one page per change, the ask, the numbers in
+    /// the video, positions within what was recorded, the worker's keys.
+    static func checkClaudeLog() {
+        var log = ClaudeCodeLog()
+        let page = ClaudeCodeLog.PageEntry(t: 1, app: "Safari", title: "Checkout", url: nil)
+        log.addPage(page)
+        log.addPage(ClaudeCodeLog.PageEntry(t: 2, app: "Safari", title: "Checkout", url: nil))
+        precondition(log.pages.count == 1, "two identical pages in a row were both kept")
+        log.addPage(ClaudeCodeLog.PageEntry(t: 3, app: "Safari", title: "Receipt", url: nil))
+        precondition(log.pages.count == 2, "a new title wasn't a new page")
+
+        let ask = ClaudeCodeLog.ask(url: "https://screendrop-worker.peteknowsai.workers.dev/7f3e91c2")
+        precondition(ask == "Fix what this recording shows: screendrop-worker.peteknowsai.workers.dev/7f3e91c2", ask)
+
+        log.clicks = (1...3).map {
+            ClaudeCodeLog.ClickEntry(t: Double($0) * 2, x: 0.5, y: 0.5, n: $0, app: "Safari", title: "Checkout", url: nil)
+        }
+        let numbers = log.textOverlays()
+        precondition(numbers.map(\.text) == ["1", "2", "3"], "click overlays read \(numbers.map(\.text))")
+        precondition(numbers.allSatisfy { abs($0.duration - 3) < 0.001 }, "click overlays don't last 3 s")
+
+        let inside = ClaudeCodeLog.normalize(
+            quartzPoint: CGPoint(x: 300, y: 200), captureRect: CGRect(x: 200, y: 100, width: 400, height: 200)
+        )
+        precondition(inside == CGPoint(x: 0.25, y: 0.5), "normalized to \(String(describing: inside))")
+        precondition(ClaudeCodeLog.normalize(
+            quartzPoint: CGPoint(x: 50, y: 50), captureRect: CGRect(x: 200, y: 100, width: 400, height: 200)
+        ) == nil, "a point outside the recording got a position")
+
+        guard let data = try? JSONEncoder().encode(log),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            preconditionFailure("the log didn't encode")
+        }
+        precondition(Set(object.keys) == ["clicks", "pages", "pins"], "top-level keys are \(object.keys)")
+        let firstClick = (object["clicks"] as? [[String: Any]])?.first ?? [:]
+        precondition(Set(firstClick.keys) == ["t", "x", "y", "n", "app", "title"], "click keys are \(firstClick.keys)")
+    }
+
     static func checkLoomEditDocument() {
         let size = CGSize(width: 1440, height: 900)
         let plain = LoomEditDocument.make(input: .init(captureSizeInPoints: size, hasCamera: true))
