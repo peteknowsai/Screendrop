@@ -10,7 +10,23 @@ struct LoomParityChecks {
         checkHotkeyDefaults()
         checkPrivacyChoice()
         checkWallpaper()
+        checkInlineConfirm()
         print("loom parity checks passed")
+    }
+
+    /// Restart and delete act on the second tap inside three seconds only.
+    static func checkInlineConfirm() {
+        let start = Date(timeIntervalSinceReferenceDate: 0)
+        var confirm = InlineConfirm()
+        precondition(!confirm.tap(at: start), "the first tap acted")
+        precondition(confirm.isArmed)
+        precondition(confirm.tap(at: start.addingTimeInterval(2.9)), "a second tap in time did nothing")
+        precondition(!confirm.isArmed, "confirming left it armed")
+
+        precondition(!confirm.tap(at: start.addingTimeInterval(10)))
+        precondition(!confirm.tap(at: start.addingTimeInterval(13.5)), "a late tap acted")
+        precondition(confirm.isArmed, "a late tap should arm it again")
+        precondition(confirm.tap(at: start.addingTimeInterval(14)))
     }
 
     static func emptyDefaults() -> UserDefaults {

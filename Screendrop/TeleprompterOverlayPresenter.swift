@@ -142,6 +142,8 @@ final class TeleprompterOverlayPresenter {
 
     private init() {}
 
+    var isShowing: Bool { panel?.isVisible == true }
+
     func show(script: String, displayID: CGDirectDisplayID?) {
         guard let screen = ActiveDisplayResolver.screen(for: displayID) ?? NSScreen.main else { return }
 

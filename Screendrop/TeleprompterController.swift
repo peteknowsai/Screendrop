@@ -58,6 +58,17 @@ final class TeleprompterController {
         }
     }
 
+    /// The recording pill's speaker-notes button: the script on or off
+    /// mid-take. Turned on late, it shows without following your voice.
+    func toggleOverlay(displayID: CGDirectDisplayID?) {
+        let overlay = TeleprompterOverlayPresenter.shared
+        if overlay.isShowing {
+            overlay.hide()
+        } else {
+            overlay.show(script: ScreendropPreferences.recordingTeleprompterScript, displayID: displayID)
+        }
+    }
+
     func setPaused(_ paused: Bool) {
         activeEngine?.setPaused(paused)
     }

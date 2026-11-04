@@ -132,6 +132,10 @@ final class ScreenRecordingManager {
     /// What the next or current recording is for, set by the entry point
     /// that opened the recorder. Back to `.screen` once a recording ends.
     var sourceIntent: RecordingSourceIntent = .screen
+    /// Muted mic audio is dropped, not recorded and silenced later.
+    var isMicMuted = false {
+        didSet { writer.setMicrophoneMuted(isMicMuted) }
+    }
     var elapsedTime: TimeInterval = 0
     var errorMessage: String?
     var onFinishRecording: ((RecordingSession, CGDirectDisplayID?) -> Void)?
@@ -140,7 +144,7 @@ final class ScreenRecordingManager {
     private let writer = ScreenRecordingWriter()
     private let pointerActivityRecorder = PointerActivityRecorder()
     private let keystrokeRecorder = RecordingKeystrokeRecorder()
-    private var displayID: CGDirectDisplayID?
+    private(set) var displayID: CGDirectDisplayID?
     private var session: RecordingSession?
     var activeSessionDirectoryURL: URL? { isActive ? session?.directoryURL : nil }
     private var manifest = CaptureManifest()
@@ -328,6 +332,7 @@ final class ScreenRecordingManager {
         pausedAt = Date()
         state = .paused
         updateElapsedTime()
+        RecordingPausedToast.shared.show(displayID: displayID)
     }
 
     func resumeRecording() {
@@ -345,6 +350,7 @@ final class ScreenRecordingManager {
         TeleprompterController.shared.setPaused(false)
         state = .recording
         updateElapsedTime()
+        RecordingPausedToast.shared.hide()
     }
 
     func restartRecording() {
@@ -704,6 +710,7 @@ final class ScreenRecordingManager {
         pointerActivityRecorder.stop()
         keystrokeRecorder.stop()
         TeleprompterController.shared.endRecordingSession()
+        RecordingPausedToast.shared.hide()
         endActivity()
         if finishAction != .restart {
             RecordingWallpaper.restore()
@@ -717,6 +724,7 @@ final class ScreenRecordingManager {
         finishAction = .preview
         isStopping = false
         sourceIntent = .screen
+        isMicMuted = false
         state = .idle
         HotkeyManager.shared.unregisterSessionHotkeys()
     }
@@ -1070,6 +1078,7 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
     private var isSessionStarted = false
     private var sessionStartTime: CMTime?
     private var isPaused = false
+    private var isMicrophoneMuted = false
     private var pauseStartTime: CMTime?
     private var totalPauseDuration: CMTime = .zero
     private var latestAdjustedTime: CMTime = .zero
@@ -1148,6 +1157,7 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
             isSessionStarted = false
             sessionStartTime = nil
             isPaused = false
+            isMicrophoneMuted = false
             pauseStartTime = nil
             totalPauseDuration = .zero
             latestAdjustedTime = .zero
@@ -1182,6 +1192,10 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
             isPaused = false
             needsPauseDurationUpdate = true
         }
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) {
+        writingQueue.async { [weak self] in self?.isMicrophoneMuted = muted }
     }
 
     func writeVideoSample(_ sampleBuffer: CMSampleBuffer) {
@@ -1238,7 +1252,8 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
                     input = self.microphoneInput
                 }
                 // Audio before the first video frame has no timeline home yet.
-                guard let input, self.isSessionStarted, !self.isPaused else { return }
+                guard let input, self.isSessionStarted, !self.isPaused,
+                      !(kind == .microphone && self.isMicrophoneMuted) else { return }
 
                 let sampleBuffer = sendableSampleBuffer.sampleBuffer
                 let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
