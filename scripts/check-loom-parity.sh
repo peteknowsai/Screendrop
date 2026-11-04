@@ -9,6 +9,8 @@ mkdir -p "$work"
 xcrun swiftc -module-cache-path "$work/ModuleCache" \
   Screendrop/RecordingRenderKey.swift \
   Screendrop/CaptureHotkeys.swift \
+  Screendrop/RecordingPrivacyChoice.swift \
+  Screendrop/RecordingScreenCleanup.swift \
   scripts/check-loom-parity.swift \
   -o "$work/check"
 "$work/check"

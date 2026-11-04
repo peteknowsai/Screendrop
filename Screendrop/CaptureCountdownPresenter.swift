@@ -9,7 +9,8 @@ import SwiftUI
 /// Shows a brief centered countdown before a capture is taken, so the user can
 /// arrange hover states, menus, etc. Driven by the `captureDelaySeconds`
 /// preference. The overlay is fully torn down before the capture fires, so it
-/// never appears in the screenshot.
+/// never appears in the screenshot. A click on it skips the rest, as Loom's
+/// does; Esc calls the capture off.
 @MainActor
 @Observable
 final class CaptureCountdownPresenter {
@@ -24,6 +25,7 @@ final class CaptureCountdownPresenter {
     private var countdownTask: Task<Bool, Never>?
     private var escapeMonitor: Any?
     private var globalEscapeMonitor: Any?
+    private var skipped = false
 
     /// False means cancelled or another countdown is already in progress.
     func runIfNeeded(seconds: Int, displayID: CGDirectDisplayID?) async -> Bool {
@@ -32,6 +34,7 @@ final class CaptureCountdownPresenter {
         let id = UUID()
         runID = id
         isRunning = true
+        skipped = false
         installEscapeMonitors()
         let task = Task { @MainActor in
             guard runID == id, !Task.isCancelled else { return false }
@@ -58,8 +61,21 @@ final class CaptureCountdownPresenter {
             task.cancel()
         }
         guard runID == id else { return false }
+        let wasSkipped = skipped
         cancel()
-        return completed && !Task.isCancelled
+        if wasSkipped {
+            // The panel has to be off screen before the capture's first frame.
+            try? await Task.sleep(for: .milliseconds(80))
+        }
+        return (completed || wasSkipped) && !Task.isCancelled
+    }
+
+    /// Ends the countdown now and lets the capture go ahead.
+    func skip() {
+        guard isRunning, countdownTask != nil else { return }
+        skipped = true
+        dismiss()
+        countdownTask?.cancel()
     }
 
     func cancel() {
@@ -89,13 +105,9 @@ final class CaptureCountdownPresenter {
     private func present(model: CaptureCountdownModel, displayID: CGDirectDisplayID?) {
         dismiss()
 
-        let hostingView = NSHostingView(rootView: CaptureCountdownView(model: model, onCancel: { [weak self] in self?.cancel() }))
+        let hostingView = NSHostingView(rootView: CaptureCountdownView(model: model, onSkip: { [weak self] in self?.skip() }))
         hostingView.sizingOptions = []
-        // Room around the glass for the shadow it casts.
-        let size = NSSize(
-            width: CaptureCountdownView.size + 2 * CaptureCountdownView.shadowSlack,
-            height: CaptureCountdownView.size + 2 * CaptureCountdownView.shadowSlack
-        )
+        let size = CaptureCountdownView.panelSize
 
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: size),
@@ -150,61 +162,49 @@ private final class CaptureCountdownModel {
     }
 }
 
-/// A glass square in the middle of the screen: the seconds left, a ring
-/// that drains through each second, and how to call it off.
+/// Loom's countdown: a big dark circle in the middle of the screen with the
+/// seconds left, and under it how to skip or call it off.
 private struct CaptureCountdownView: View {
-    static let size: CGFloat = 140
-    static let shadowSlack: CGFloat = 32
+    static let diameter: CGFloat = 190
+    /// The hint sits 120 points below the centre; this leaves it room.
+    static let panelSize = NSSize(width: 320, height: 2 * (120 + 24))
 
     @State var model: CaptureCountdownModel
-    let onCancel: () -> Void
+    let onSkip: () -> Void
 
-    @State private var ring: Double = 1
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(spacing: 9) {
-            ZStack {
-                Circle()
-                    .stroke(Palette.hairline, lineWidth: 3)
-                Circle()
-                    .trim(from: 0, to: ring)
-                    .stroke(Palette.label, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-
+        ZStack {
+            Button(action: onSkip) {
                 Text("\(model.remaining)")
-                    .font(.system(size: 44, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Palette.label)
+                    .font(.system(size: 112, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
                     .contentTransition(.numericText(countsDown: true))
-                    .motion(.morphQuick, value: model.remaining)
-            }
-            .frame(width: 84, height: 84)
-
-            Button(action: onCancel) {
-                HStack(spacing: 5) {
-                    KeyCap(label: "esc", isSmall: true)
-                    Text("to cancel")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Palette.secondaryLabel)
-                }
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: model.remaining)
+                    .frame(width: Self.diameter, height: Self.diameter)
+                    .background(Circle().fill(Color(red: 20 / 255, green: 20 / 255, blue: 24 / 255).opacity(0.55)))
+                    .background(.ultraThinMaterial, in: Circle())
+                    .environment(\.colorScheme, .dark)
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .help("Cancel countdown (Esc)")
-        }
-        .frame(width: Self.size, height: Self.size)
-        .glassHUD()
-        .padding(Self.shadowSlack)
-        .onAppear { drain(from: model.remaining) }
-        .onChange(of: model.remaining) { _, value in drain(from: value) }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Capturing in \(model.remaining)")
-    }
+            .help("Click to skip, Esc to cancel")
 
-    /// Sets the ring to this second's start, then drains it to the next.
-    private func drain(from value: Int) {
-        let start = Double(value) / Double(model.total)
-        let end = Double(value - 1) / Double(model.total)
-        ring = start
-        withAnimation(reduceMotion ? nil : .linear(duration: 1)) { ring = end }
+            HStack(spacing: 14) {
+                Text("Click to skip")
+                Text("Esc to cancel")
+            }
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(.white)
+            .shadow(color: .black.opacity(0.4), radius: 2, y: 1)
+            .offset(y: 120)
+            .allowsHitTesting(false)
+        }
+        .frame(width: Self.panelSize.width, height: Self.panelSize.height)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Starting in \(model.remaining). Click to skip, Escape to cancel.")
+        .accessibilityAddTraits(.isButton)
     }
 }

@@ -121,6 +121,11 @@ enum BarTooltipID: String {
     case teleprompter
     case timer
     case close
+    case cameraOnly
+    case privacy
+    case more
+    case claude
+    case record
 
     case pauseResume
     case restart

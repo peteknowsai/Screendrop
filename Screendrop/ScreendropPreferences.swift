@@ -51,6 +51,28 @@ enum ScreendropPreferences {
     static let recordingAreaAspectKey = "recordingAreaAspect"
     /// The last area recorded, so a retake starts from the same framing.
     static let recordingAreaLastSelectionKey = "recordingAreaLastSelection"
+    /// Which source the ready bar's segment is on: a `RecordingSourceMode`.
+    static let recordingSourceModeKey = "recordingSourceMode"
+    /// Display and area recordings leave out the Dock and, for a display,
+    /// the menu bar strip.
+    static let recordingHideMenuBarAndDockKey = "recordingHideMenuBarAndDock"
+    /// Loom's yellow click rings in the shared video. On unless turned off.
+    static let recordingHighlightClicksKey = "recordingHighlightClicks"
+    /// The uploaded video's size: a `RecordingUploadResolution`.
+    static let recordingUploadResolutionKey = "recordingUploadResolution"
+
+    static var recordingHideMenuBarAndDock: Bool {
+        UserDefaults.standard.bool(forKey: recordingHideMenuBarAndDockKey)
+    }
+
+    static var recordingHighlightClicks: Bool {
+        UserDefaults.standard.object(forKey: recordingHighlightClicksKey) as? Bool ?? true
+    }
+
+    static var recordingUploadResolution: RecordingUploadResolution {
+        UserDefaults.standard.string(forKey: recordingUploadResolutionKey)
+            .flatMap(RecordingUploadResolution.init(rawValue:)) ?? .p1080
+    }
 
     private static let defaultCompressionQuality = 0.8
 

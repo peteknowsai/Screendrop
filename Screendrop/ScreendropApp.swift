@@ -160,6 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if RecordingExportBenchmark.runIfRequested() { return }
         #endif
         HotkeyManager.shared.registerHotkeys()
+        // A recording cut short by a crash or quit left its backdrop up.
+        RecordingWallpaper.restore()
         AgentServer.shared.updateForPreference()
         RecordingRecoveryCoordinator.recoverInterruptedRecordings()
         // Indexing is background work; let launch settle first.

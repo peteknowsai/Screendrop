@@ -108,11 +108,13 @@ nonisolated struct ScreenRecordingCaptureOptions: Sendable {
     var capturesSystemAudio = false
     var microphoneDeviceID: String?
     var cameraDeviceID: String?
+    var hidesMenuBarAndDock = false
 
     @MainActor
     static func fromPreferences() -> ScreenRecordingCaptureOptions {
         var options = ScreenRecordingCaptureOptions()
         options.capturesSystemAudio = ScreendropPreferences.recordingSystemAudio
+        options.hidesMenuBarAndDock = ScreendropPreferences.recordingHideMenuBarAndDock
         let micID = ScreendropPreferences.recordingMicrophoneDeviceID
         options.microphoneDeviceID = micID.isEmpty ? nil : micID
         let cameraID = ScreendropPreferences.recordingCameraDeviceID
@@ -191,6 +193,15 @@ final class ScreenRecordingManager {
 
                 if !inputWarnings.isEmpty {
                     Self.presentInputWarnings(inputWarnings)
+                }
+
+                // Display and area only: a window recording never shows the desktop.
+                if source.displayID != nil, let screen = ActiveDisplayResolver.screen(for: targetDisplayID) {
+                    do {
+                        try RecordingWallpaper.apply(RecordingWallpaper.stored(), to: screen)
+                    } catch {
+                        NSLog("[Screendrop] Could not set the recording background: \(error)")
+                    }
                 }
 
                 // The teleprompter session starts before the capture wires
@@ -392,6 +403,7 @@ final class ScreenRecordingManager {
     private func finalizeSession(result: ScreenRecordingWriterResult, cameraResult: CameraRecordingResult?) {
         let action = finishAction
         let restartSource = currentSource
+        let restartIntent = sourceIntent
         let restartDisplayID = displayID
         let session = session
         let terminationCompletion = terminationCompletion
@@ -482,6 +494,7 @@ final class ScreenRecordingManager {
         case .restart:
             RecordingSessionStore.deleteSession(session)
             if let restartSource {
+                sourceIntent = restartIntent
                 startRecording(source: restartSource)
             }
         case .terminate:
@@ -692,6 +705,9 @@ final class ScreenRecordingManager {
         keystrokeRecorder.stop()
         TeleprompterController.shared.endRecordingSession()
         endActivity()
+        if finishAction != .restart {
+            RecordingWallpaper.restore()
+        }
         session = nil
         displayID = nil
         currentSource = nil
@@ -724,15 +740,31 @@ final class ScreenRecordingManager {
             filter = ScreenRecordingCapture.displayFilter(
                 display: freshDisplay,
                 content: content,
-                includesAppWindows: includesAppWindows
+                includesAppWindows: includesAppWindows,
+                hidesDock: options.hidesMenuBarAndDock
             )
-            sourceSize = CGSize(width: freshDisplay.width, height: freshDisplay.height)
-            // Input mapping rects are always Quartz top-left, the space
-            // SCDisplay.frame, SCWindow.frame, and CGEvent locations already
-            // share. Only the area selection, which arrives from AppKit, is
-            // converted - and exactly once, here rather than at normalization.
-            let bounds = CGDisplayBounds(freshDisplay.displayID)
-            captureRect = bounds.isEmpty ? freshDisplay.frame : bounds
+            let screen = ActiveDisplayResolver.screen(for: freshDisplay.displayID)
+            if options.hidesMenuBarAndDock, let screen, screen.visibleFrame.maxY < screen.frame.maxY {
+                // The menu bar is drawn by the system, so no filter takes it
+                // out; the top strip is cropped off instead.
+                let crop = menuBarCropRect(frame: screen.frame, visibleFrame: screen.visibleFrame)
+                let mappedSourceRect = Self.sourceRect(
+                    forAppKitSelectionRect: crop,
+                    screenFrame: screen.frame,
+                    contentRect: filter.contentRect
+                )
+                sourceRect = mappedSourceRect
+                sourceSize = mappedSourceRect.size
+                captureRect = Self.quartzRect(fromAppKitRect: crop)
+            } else {
+                sourceSize = CGSize(width: freshDisplay.width, height: freshDisplay.height)
+                // Input mapping rects are always Quartz top-left, the space
+                // SCDisplay.frame, SCWindow.frame, and CGEvent locations already
+                // share. Only the area selection, which arrives from AppKit, is
+                // converted - and exactly once, here rather than at normalization.
+                let bounds = CGDisplayBounds(freshDisplay.displayID)
+                captureRect = bounds.isEmpty ? freshDisplay.frame : bounds
+            }
             displayID = freshDisplay.displayID
             tracksDynamicGeometry = false
         case .window(let window):
@@ -750,7 +782,8 @@ final class ScreenRecordingManager {
             filter = ScreenRecordingCapture.displayFilter(
                 display: freshDisplay,
                 content: content,
-                includesAppWindows: includesAppWindows
+                includesAppWindows: includesAppWindows,
+                hidesDock: options.hidesMenuBarAndDock
             )
             let mappedSourceRect = Self.sourceRect(
                 forAppKitSelectionRect: rect,
@@ -912,21 +945,30 @@ nonisolated final class ScreenRecordingCapture: NSObject, SCStreamOutput, SCStre
         try await stream.stopCapture()
     }
 
+    /// ponytail: windows at menu-bar level from other apps (status items'
+    /// popovers) stay in; a window-list filter is a snapshot and would miss
+    /// windows opened after the stream starts.
     static func displayFilter(
         display: SCDisplay,
         content: SCShareableContent,
-        includesAppWindows: Bool
+        includesAppWindows: Bool,
+        hidesDock: Bool = false
     ) -> SCContentFilter {
-        let excludedApps = includesAppWindows
-            ? []
-            : content.applications.filter { application in
-                application.bundleIdentifier == Bundle.main.bundleIdentifier
-            }
+        let dock = "com.apple.dock"
+        let excludedApps = content.applications.filter { application in
+            (!includesAppWindows && application.bundleIdentifier == Bundle.main.bundleIdentifier)
+                || (hidesDock && application.bundleIdentifier == dock)
+        }
+        // The Dock process also draws the desktop picture, below every
+        // normal window; those stay in so the background isn't black.
+        let desktopWindows = hidesDock
+            ? content.windows.filter { $0.owningApplication?.bundleIdentifier == dock && $0.windowLayer < 0 }
+            : []
 
         return SCContentFilter(
             display: display,
             excludingApplications: excludedApps,
-            exceptingWindows: []
+            exceptingWindows: desktopWindows
         )
     }
 

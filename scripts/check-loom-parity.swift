@@ -8,7 +8,43 @@ struct LoomParityChecks {
     static func main() {
         checkRenderKey()
         checkHotkeyDefaults()
+        checkPrivacyChoice()
+        checkWallpaper()
         print("loom parity checks passed")
+    }
+
+    static func emptyDefaults() -> UserDefaults {
+        let name = "loom-parity-check-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    /// The lock menu's choice reaches the worker as its own two words.
+    static func checkPrivacyChoice() {
+        precondition(RecordingPrivacyChoice.link.apiValue == "link")
+        precondition(RecordingPrivacyChoice.onlyYou.apiValue == "private")
+        precondition(RecordingPrivacyChoice.stored(in: emptyDefaults()) == .link)
+    }
+
+    static func checkWallpaper() {
+        let record = RecordingWallpaper.RestoreRecord(
+            displayID: 1,
+            url: URL(fileURLWithPath: "/System/Library/Desktop Pictures/Solid Colors/Black.png"),
+            scaling: 3,
+            allowClipping: true,
+            fillColor: [0.1, 0.2, 0.3, 1]
+        )
+        let data = try! JSONEncoder().encode(record)
+        precondition(try! JSONDecoder().decode(RecordingWallpaper.RestoreRecord.self, from: data) == record)
+        precondition(RecordingWallpaper.Backdrop(rawValue: "nope") == nil)
+        precondition(RecordingWallpaper.stored(in: emptyDefaults()) == .off)
+
+        let crop = menuBarCropRect(
+            frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            visibleFrame: CGRect(x: 0, y: 70, width: 1512, height: 875)
+        )
+        precondition(crop == CGRect(x: 0, y: 0, width: 1512, height: 945), "crop is \(crop)")
     }
 
     /// Loom's recording keys (Q7); the screenshot keys stay as they were.
