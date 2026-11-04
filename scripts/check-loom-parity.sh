@@ -18,6 +18,13 @@ xcrun swiftc -module-cache-path "$work/ModuleCache" \
   Screendrop/InlineConfirm.swift \
   Screendrop/CameraBubbleModel.swift \
   Screendrop/CameraFilter.swift \
+  Screendrop/PenStrokes.swift \
+  Screendrop/Engine/InkPath.swift \
+  Screendrop/Engine/StrokeOptions.swift \
+  Screendrop/Engine/StrokePipeline.swift \
+  Screendrop/Engine/StrokeOutline.swift \
+  Screendrop/Engine/Vec.swift \
+  Screendrop/Engine/MathUtils.swift \
   scripts/check-loom-parity.swift \
   -o "$work/check"
 "$work/check"

@@ -1,3 +1,4 @@
+import AppKit
 import Carbon.HIToolbox
 import CoreImage
 import Foundation
@@ -14,6 +15,7 @@ struct LoomParityChecks {
         checkInlineConfirm()
         checkBubble()
         checkCameraFilter()
+        checkPen()
         print("loom parity checks passed")
     }
 
@@ -181,6 +183,31 @@ struct LoomParityChecks {
         precondition(Set(ids).count == ids.count, "two actions share a hot key id")
         let sessionOnly = CaptureHotkeyAction.allCases.filter(\.isSessionOnly)
         precondition(sessionOnly == [.pauseResume, .stopRecording], "session-only actions are \(sessionOnly)")
+    }
+
+    /// Each stroke is its own overlay, gone five seconds after mouse-up, and
+    /// its PNG is drawn top-left like the points.
+    static func checkPen() {
+        let first = penOverlayTimes(PenStroke(points: [], start: 1.0))
+        let second = penOverlayTimes(PenStroke(points: [], start: 3.0))
+        precondition(first.start == 1 && first.end == 6, "first stroke \(first)")
+        precondition(second.start == 3 && second.end == 8, "second stroke \(second)")
+        let held = penOverlayTimes(PenStroke(points: [], start: 2, duration: 1.5))
+        precondition(held.end == 8.5, "a held stroke fades from mouse-up, \(held)")
+        precondition(quartzToAppKit(CGPoint(x: 10, y: 100), primaryScreenHeight: 900) == CGPoint(x: 10, y: 800))
+
+        let diagonal = PenStroke(
+            points: (0...20).map { CGPoint(x: 0.1 + 0.04 * Double($0), y: 0.1 + 0.04 * Double($0)) },
+            start: 0
+        )
+        guard let png = renderPNG([diagonal], canvas: CGSize(width: 200, height: 100)),
+              let bitmap = NSBitmapImageRep(data: png) else { preconditionFailure("the pen PNG did not render") }
+        precondition(bitmap.pixelsWide == 200 && bitmap.pixelsHigh == 100, "pen PNG is \(bitmap.size)")
+        func alpha(_ x: Int, _ y: Int) -> CGFloat { bitmap.colorAt(x: x, y: y)?.alphaComponent ?? -1 }
+        precondition(alpha(100, 50) > 0.5, "no ink in the middle")
+        precondition(alpha(170, 85) > 0.5, "no ink near the bottom-right end")
+        precondition(alpha(170, 15) == 0, "the stroke is drawn upside down")
+        precondition(alpha(2, 97) == 0, "ink in the corner")
     }
 
     /// Two callers share a flatten only for the same session and the same edits.

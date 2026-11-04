@@ -32,8 +32,10 @@ extension RecordingBarPresenter {
 struct RecordingSessionControls: View {
     static let stopTint = Color(red: 0xD6 / 255, green: 0x2E / 255, blue: 0x12 / 255)
     static let pausedTint = Color(red: 0x2A / 255, green: 0x64 / 255, blue: 0xE3 / 255)
+    static let penTint = Color(red: 0xFF / 255, green: 0x4D / 255, blue: 0x2E / 255)
 
     @State private var manager = ScreenRecordingManager.shared
+    @State private var pen = PenOverlayController.shared
     @AppStorage(ScreendropPreferences.recordingTeleprompterScriptKey) private var script = ""
 
     private var isPaused: Bool {
@@ -110,6 +112,19 @@ struct RecordingSessionControls: View {
                 TeleprompterController.shared.toggleOverlay(displayID: manager.displayID)
             }
             .disabled(script.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            if pen.isAvailable {
+                BarActionButton(
+                    id: .pen,
+                    title: pen.isOn ? "Put the pen down" : "Draw on screen",
+                    systemImage: "pencil.tip",
+                    tint: pen.isOn ? Self.penTint : BarMetrics.activeTint,
+                    isSelected: pen.isOn,
+                    accessibility: "Draw on screen; each stroke fades after five seconds"
+                ) {
+                    pen.toggle()
+                }
+            }
         }
     }
 

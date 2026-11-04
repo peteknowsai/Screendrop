@@ -306,6 +306,12 @@ final class ScreenRecordingManager {
                 accumulatedPauseDuration = 0
                 elapsedTime = 0
                 state = .recording
+                if sourceIntent != .cameraOnly {
+                    PenOverlayController.shared.begin(
+                        displayID: target.displayID,
+                        captureRect: Self.quartzRect(fromAppKitRect: target.inputMapping.captureRect)
+                    )
+                }
                 HotkeyManager.shared.registerSessionHotkeys()
                 beginActivity()
                 startTimer()
@@ -520,23 +526,52 @@ final class ScreenRecordingManager {
     private func writeStartingEdit(to session: RecordingSession, hasCamera: Bool, intent: RecordingSourceIntent) {
         let scale = max(manifest.pixelScale, 1)
         let camera = CameraRecordingManager.shared
+        let captureSize = CGSize(
+            width: CGFloat(manifest.pixelWidth) / CGFloat(scale),
+            height: CGFloat(manifest.pixelHeight) / CGFloat(scale)
+        )
         let document = LoomEditDocument.make(input: .init(
-            captureSizeInPoints: CGSize(
-                width: CGFloat(manifest.pixelWidth) / CGFloat(scale),
-                height: CGFloat(manifest.pixelHeight) / CGFloat(scale)
-            ),
+            captureSizeInPoints: captureSize,
             hasCamera: hasCamera,
             bubble: CameraBubblePanel.shared.state,
             hiddenIntervals: camera.hiddenIntervals,
             fullIntervals: camera.fullIntervals,
             highlightClicks: ScreendropPreferences.recordingHighlightClicks,
             resolution: ScreendropPreferences.recordingUploadResolution,
-            intent: intent
+            intent: intent,
+            imageOverlays: penOverlays(in: session, captureSize: captureSize)
         ))
         do {
             try session.writeStartingDocument(document)
         } catch {
             NSLog("[Screendrop] Failed to save the take's starting edit: \(error)")
+        }
+    }
+
+    /// One PNG under media/ and one image overlay per pen stroke, each
+    /// covering the whole frame.
+    /// ponytail: placed on the canvas, so padding added in Studio shifts the
+    /// ink off the footage; place on the screen layer if that bites.
+    private func penOverlays(in session: RecordingSession, captureSize: CGSize) -> [RecordingImageOverlay] {
+        let strokes = PenOverlayController.shared.takeStrokes()
+        guard !strokes.isEmpty, captureSize.width > 0, captureSize.height > 0 else { return [] }
+        let media = session.directoryURL.appendingPathComponent("media", isDirectory: true)
+        try? FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        // Overlay images are decoded at 1600 px at most.
+        let scale = min(2, 1600 / max(captureSize.width, captureSize.height))
+        let canvas = CGSize(width: captureSize.width * scale, height: captureSize.height * scale)
+        return strokes.enumerated().compactMap { index, stroke in
+            let name = "pen-\(UUID().uuidString).png"
+            guard let png = renderPNG([stroke], canvas: canvas, lineWidth: PenStroke.lineWidth * scale),
+                  (try? png.write(to: media.appendingPathComponent(name))) != nil else { return nil }
+            let times = penOverlayTimes(stroke)
+            var overlay = RecordingImageOverlay(
+                fileName: name, displayName: "Pen stroke \(index + 1)", start: times.start, end: times.end
+            )
+            overlay.width = 1
+            overlay.aspect = captureSize.width / captureSize.height
+            overlay.fadeOut = 0.4
+            return overlay
         }
     }
 
@@ -754,6 +789,7 @@ final class ScreenRecordingManager {
         TeleprompterController.shared.endRecordingSession()
         RecordingPausedToast.shared.hide()
         CameraBubblePanel.shared.isPaused = false
+        PenOverlayController.shared.end()
         endActivity()
         if finishAction != .restart {
             RecordingWallpaper.restore()

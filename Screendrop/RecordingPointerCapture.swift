@@ -72,6 +72,8 @@ nonisolated final class PointerActivityRecorder: NSObject, @unchecked Sendable {
     private var lastCursorIdentity: ObjectIdentifier?
     private var hasFrameAlignedSample = false
     private var pressedButtons = Set<Int>()
+    /// Buttons whose press landed on our own UI, so the release goes too.
+    private var swallowedButtons = Set<Int>()
     private var pauseStartedUptime: TimeInterval?
     private var pauseIntervals: [PauseInterval] = []
 
@@ -100,6 +102,7 @@ nonisolated final class PointerActivityRecorder: NSObject, @unchecked Sendable {
             lastCursorIdentity = nil
             hasFrameAlignedSample = false
             pressedButtons = []
+            swallowedButtons = []
             pauseStartedUptime = nil
             pauseIntervals = []
         }
@@ -552,6 +555,16 @@ nonisolated final class PointerActivityRecorder: NSObject, @unchecked Sendable {
     /// `duplicatePressWindow` marks a duplicate rather than a human
     /// double-click - those repeat far slower and interleave a release.
     private func appendPress(_ press: CapturedPressEvent) {
+        // Clicks on the pill, the bubble or the pen stay out of the video.
+        switch press.phase {
+        case .down where Self.landsOnOwnWindow(press.point):
+            swallowedButtons.insert(press.button)
+            return
+        case .up where swallowedButtons.remove(press.button) != nil || Self.landsOnOwnWindow(press.point):
+            return
+        default:
+            break
+        }
         if let last = presses.last,
            last.button == press.button,
            last.phase == press.phase,
@@ -560,6 +573,14 @@ nonisolated final class PointerActivityRecorder: NSObject, @unchecked Sendable {
             return
         }
         presses.append(press)
+    }
+
+    private static func landsOnOwnWindow(_ point: CGPoint) -> Bool {
+        // The tap and the press monitors both deliver on the main run loop.
+        guard Thread.isMainThread else { return false }
+        return MainActor.assumeIsolated {
+            PreviewWindowCaptureExclusion.shared.ownsClick(atQuartz: point)
+        }
     }
 
     // MARK: - Pointer artwork

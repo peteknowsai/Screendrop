@@ -119,6 +119,7 @@ enum BarTooltipID: String {
     case microphone
     case systemAudio
     case teleprompter
+    case pen
     case timer
     case close
     case cameraOnly
