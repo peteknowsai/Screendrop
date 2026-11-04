@@ -311,6 +311,8 @@ final class ScreenRecordingManager {
                 elapsedTime = 0
                 state = .recording
                 reserveLinkIfNeeded()
+                // The last take's card would only be in the way now.
+                RecordingLinkCardPresenter.shared.hide()
                 if sourceIntent != .cameraOnly {
                     PenOverlayController.shared.begin(
                         displayID: target.displayID,

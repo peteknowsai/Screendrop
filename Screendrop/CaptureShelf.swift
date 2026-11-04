@@ -669,6 +669,43 @@ final class CaptureShelf {
         }
     }
 
+    /// A recording whose link was reserved when it started. The link card
+    /// stands in for a shelf card, so this runs the other after-capture
+    /// actions and the upload into that link, under the id it returns. Copy
+    /// is skipped: the link is what's on the clipboard.
+    func addLinkedVideo(url: URL, cloudID: String) -> ShelfItem.ID {
+        let id = ShelfItem.ID()
+        if AfterCaptureActions.isEnabled(.save, for: .recording) {
+            Task { _ = await saveVideoToDefaultLocation(from: url, itemID: nil) }
+        }
+        if AfterCaptureActions.isEnabled(.openVideoEditor, for: .recording) {
+            CaptureShelfPresenter.shared.onEditVideo?(url)
+        }
+        uploadLinked(url: url, cloudID: cloudID, itemID: id)
+        return id
+    }
+
+    /// Uploads into a reserved link. It was copied at stop, so finishing
+    /// doesn't copy it again.
+    func uploadLinked(url: URL, cloudID: String, itemID: ShelfItem.ID) {
+        guard CloudUploader.shared.isConfigured else { return }
+        Task {
+            do {
+                let result = try await CloudUploader.shared.upload(
+                    itemID: itemID,
+                    fileURL: url,
+                    socialEnabled: CloudUploadPreferences.lastSocialEnabled,
+                    existingID: cloudID
+                )
+                ScreenshotHistoryStore.shared.setCloudURL(for: url, cloudURL: result.url)
+            } catch is CancellationError {
+                return
+            } catch {
+                print("Upload into the reserved link failed: \(error)")
+            }
+        }
+    }
+
     /// The link a recording reserved when it started, from its project.json.
     static func reservedCloudID(for url: URL) -> String? {
         let directory = url.deletingLastPathComponent()

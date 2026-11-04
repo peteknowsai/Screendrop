@@ -122,6 +122,18 @@ struct ScreendropApp: App {
                 // a full-resolution transcode.
                 let historyURL = await ScreenshotHistoryStore.shared.importRecordingSession(session)
                 RecordingProjectStore.shared.reload()
+                if let metadata = session.loadProjectMetadata(),
+                   let cloudID = metadata.cloudID,
+                   let link = metadata.cloudURL {
+                    // Loom's card: the link went to the clipboard at stop.
+                    let itemID = CaptureShelf.shared.addLinkedVideo(url: historyURL, cloudID: cloudID)
+                    if AfterCaptureActions.isEnabled(.showOverlay, for: .recording) {
+                        RecordingLinkCardPresenter.shared.show(
+                            fileURL: historyURL, link: link, cloudID: cloudID, itemID: itemID, displayID: displayID
+                        )
+                    }
+                    return
+                }
                 CaptureShelf.shared.addVideo(url: historyURL)
                 if AfterCaptureActions.isEnabled(.showOverlay, for: .recording) {
                     CaptureShelfPresenter.shared.show(displayID: displayID)

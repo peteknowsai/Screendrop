@@ -283,6 +283,29 @@ final class CloudUploader: NSObject {
         failedItemIDs.remove(itemID)
     }
 
+    // MARK: - Privacy
+
+    /// Who can watch, changed from the Mac with the upload token.
+    func setPrivacy(_ privacy: String, uploadID: String) async throws {
+        let creds = CloudCredentialStore.shared.snapshot()
+        guard creds.isConfigured else { throw CloudUploadError.notConfigured }
+        guard let url = URL(string: "\(Self.normalizeWorkerURL(creds.workerURL))/api/uploads/\(uploadID)") else {
+            throw CloudUploadError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.timeoutInterval = 15
+        let token = creds.uploadToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["privacy": privacy])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw CloudUploadError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw CloudUploadError.serverError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+    }
+
     // MARK: - Delete
 
     /// Deletes an upload from the cloud entirely: R2 files (main file, poster,
