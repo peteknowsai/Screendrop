@@ -5,8 +5,8 @@
 //  Captures the webcam alongside a screen recording. The camera is written
 //  to its own camera.mov inside the recording session (never burned into
 //  the screen video) so the studio editor can restyle, reposition, or drop
-//  the bubble in post. A floating circular preview shows the user what the
-//  camera sees while recording; the preview panel is excluded from capture.
+//  the bubble in post. The live bubble (CameraBubblePanel) shows the user
+//  the same frames the writer gets; it is excluded from capture.
 //
 //  Sync: AVCaptureSession stamps buffers with the same host clock
 //  ScreenCaptureKit uses, so the first camera frame's PTS minus the screen
@@ -57,16 +57,40 @@ nonisolated enum RecordingDeviceCatalog {
 final class CameraRecordingManager {
     static let shared = CameraRecordingManager()
 
-    private let engine = CameraCaptureEngine()
-    private var previewPanel: NSPanel?
-    private var activePreviewDisplayID: CGDirectDisplayID?
+    /// What the bubble shows: the frames the writer gets, not a second tap
+    /// on the device, so anything done to a frame shows in both.
+    private let previewLayer: AVSampleBufferDisplayLayer
+    private let engine: CameraCaptureEngine
     private(set) var isRunning = false
     /// True once frames are actually being written to a `camera.mov`, as
     /// opposed to just warming the sensor for the floating preview.
     private(set) var isWriting = false
     private var activeDeviceID: String?
 
-    private init() {}
+    /// When the bubble was off or filled the screen, on the recording's own
+    /// clock with pauses taken out, so the render can follow.
+    private(set) var hiddenIntervals: [ClosedRange<Double>] = []
+    private(set) var fullIntervals: [ClosedRange<Double>] = []
+    private var hiddenSince: Double?
+    private var fullSince: Double?
+
+    private init() {
+        let layer = AVSampleBufferDisplayLayer()
+        layer.videoGravity = .resizeAspectFill
+        previewLayer = layer
+        engine = CameraCaptureEngine(preview: layer.sampleBufferRenderer)
+        reloadFrameSettings()
+    }
+
+    /// Picks up the bubble settings' filter, flip and background; frames
+    /// from the next one on carry them.
+    func reloadFrameSettings() {
+        engine.processor.update(CameraFrameProcessor.Settings(
+            filter: CameraFilter.stored(),
+            flip: ScreendropPreferences.recordingCameraFlip,
+            background: CameraBackground.stored()
+        ))
+    }
 
     /// Starts the capture session and shows the floating preview, without
     /// writing anything to disk yet. Call this as soon as the camera is
@@ -85,13 +109,14 @@ final class CameraRecordingManager {
             }
             await stopPreview()
         }
-        guard let device = RecordingDeviceCatalog.camera(withID: deviceID) else { return false }
-
-        let authorized = await AVCaptureDevice.requestAccess(for: .video)
-        guard authorized else { return false }
-
         do {
-            try await engine.startSession(device: device)
+            if FakeCamera.isFake(deviceID), let movie = FakeCamera.movieURL {
+                try await engine.startFake(movie: movie)
+            } else {
+                guard let device = RecordingDeviceCatalog.camera(withID: deviceID) else { return false }
+                guard await AVCaptureDevice.requestAccess(for: .video) else { return false }
+                try await engine.startSession(device: device)
+            }
         } catch {
             print("Camera preview failed to start: \(error)")
             return false
@@ -142,7 +167,28 @@ final class CameraRecordingManager {
         }
 
         isWriting = true
+        hiddenIntervals = []
+        fullIntervals = []
+        let bubble = CameraBubblePanel.shared.state
+        hiddenSince = bubble.isHidden ? 0 : nil
+        fullSince = bubble.isFull ? 0 : nil
         return true
+    }
+
+    /// The bubble's camera-off and full-screen toggles.
+    func noteBubble(isHidden: Bool, isFull: Bool) {
+        guard isWriting, let now = ScreenRecordingManager.shared.recordingClock else { return }
+        Self.track(isHidden, since: &hiddenSince, into: &hiddenIntervals, at: now)
+        Self.track(isFull, since: &fullSince, into: &fullIntervals, at: now)
+    }
+
+    private static func track(_ isOn: Bool, since: inout Double?, into intervals: inout [ClosedRange<Double>], at now: Double) {
+        if isOn, since == nil {
+            since = now
+        } else if !isOn, let start = since {
+            intervals.append(start...max(start, now))
+            since = nil
+        }
     }
 
     func pause() {
@@ -157,6 +203,7 @@ final class CameraRecordingManager {
 
     func stop() async -> CameraRecordingResult? {
         guard isWriting else { return nil }
+        noteBubble(isHidden: false, isFull: false)
         isRunning = false
         isWriting = false
         activeDeviceID = nil
@@ -174,63 +221,11 @@ final class CameraRecordingManager {
     }
 
     private func showPreview(displayID: CGDirectDisplayID?) {
-        // Already showing in the right place: the session (and its exposure)
-        // is untouched, so recreating the panel here would only cost a
-        // pointless layer swap.
-        if previewPanel != nil, activePreviewDisplayID == displayID {
-            return
-        }
-        hidePreview()
-
-        let diameter: CGFloat = 160
-        let screen = ActiveDisplayResolver.screen(for: displayID) ?? NSScreen.main
-        let visibleFrame = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 800, height: 600)
-        let origin = CGPoint(
-            x: visibleFrame.maxX - diameter - 24,
-            y: visibleFrame.minY + 24
-        )
-
-        let panel = NSPanel(
-            contentRect: CGRect(origin: origin, size: CGSize(width: diameter, height: diameter)),
-            styleMask: [.borderless, .nonactivatingPanel],
-            backing: .buffered,
-            defer: false
-        )
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = true
-        panel.hidesOnDeactivate = false
-        panel.isFloatingPanel = true
-        panel.isReleasedWhenClosed = false
-        panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        panel.isMovableByWindowBackground = true
-        PreviewWindowCaptureExclusion.shared.register(window: panel)
-
-        let container = NSView(frame: CGRect(origin: .zero, size: CGSize(width: diameter, height: diameter)))
-        container.wantsLayer = true
-        container.layer?.cornerRadius = diameter / 2
-        container.layer?.masksToBounds = true
-        container.layer?.backgroundColor = NSColor.black.cgColor
-        container.layer?.borderColor = NSColor.white.withAlphaComponent(0.35).cgColor
-        container.layer?.borderWidth = 1
-
-        let previewLayer = engine.makePreviewLayer()
-        previewLayer.frame = container.bounds
-        previewLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-        previewLayer.videoGravity = .resizeAspectFill
-        container.layer?.addSublayer(previewLayer)
-
-        panel.contentView = container
-        panel.orderFrontRegardless()
-        previewPanel = panel
-        activePreviewDisplayID = displayID
+        CameraBubblePanel.shared.show(displayID: displayID, videoLayer: previewLayer)
     }
 
     private func hidePreview() {
-        previewPanel?.orderOut(nil)
-        previewPanel = nil
-        activePreviewDisplayID = nil
+        CameraBubblePanel.shared.hide()
     }
 }
 
@@ -243,7 +238,18 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
     private let writer = CameraMovieWriter()
     private var input: AVCaptureDeviceInput?
     private var output: AVCaptureVideoDataOutput?
-    private var activeDevice: AVCaptureDevice?
+    private var fakeSource: FakeCameraSource?
+    private let dimensionsLock = NSLock()
+    private var frameDimensions: CMVideoDimensions?
+
+    /// The bubble's renderer; enqueueing is safe from the camera queue.
+    private let preview: AVSampleBufferVideoRenderer
+    let processor = CameraFrameProcessor()
+
+    init(preview: AVSampleBufferVideoRenderer) {
+        self.preview = preview
+        super.init()
+    }
 
     /// Starts the capture session only - no movie is written yet. Frames
     /// reach `captureOutput` immediately (for the live preview layer), but
@@ -254,7 +260,6 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
             sessionQueue.async { [self] in
                 do {
                     try configureSession(device: device)
-                    activeDevice = device
                     session.startRunning()
                     continuation.resume()
                 } catch {
@@ -265,17 +270,38 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
         }
     }
 
+    /// Loops a movie in place of a device; see FakeCameraSource.
+    func startFake(movie: URL) async throws {
+        let asset = AVURLAsset(url: movie)
+        guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let source = FakeCameraSource(asset: asset, track: track, queue: videoQueue) { [weak self] sample in
+            self?.handle(sample)
+        }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            sessionQueue.async { [self] in
+                fakeSource = source
+                source.start()
+                continuation.resume()
+            }
+        }
+    }
+
     /// Sets up the movie writer for the already-running session so its
-    /// frames start landing on disk.
+    /// frames start landing on disk, at the size the frames actually are.
     func beginWriting(outputURL: URL) async throws {
+        var dimensions = currentDimensions
+        var waited = 0
+        while dimensions == nil, waited < 100 {
+            try await Task.sleep(for: .milliseconds(20))
+            waited += 1
+            dimensions = currentDimensions
+        }
+        guard let dimensions else { throw CocoaError(.fileWriteUnknown) }
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [self] in
-                guard let activeDevice else {
-                    continuation.resume(throwing: CocoaError(.fileWriteUnknown))
-                    return
-                }
                 do {
-                    let dimensions = CMVideoFormatDescriptionGetDimensions(activeDevice.activeFormat.formatDescription)
                     try writer.setup(
                         outputURL: outputURL,
                         width: Int(dimensions.width),
@@ -313,13 +339,44 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
         await stopSession()
     }
 
-    func makePreviewLayer() -> AVCaptureVideoPreviewLayer {
-        let layer = AVCaptureVideoPreviewLayer(session: session)
-        if let connection = layer.connection, connection.isVideoMirroringSupported {
-            connection.automaticallyAdjustsVideoMirroring = false
-            connection.isVideoMirrored = true
+    private var currentDimensions: CMVideoDimensions? {
+        dimensionsLock.withLock { frameDimensions }
+    }
+
+    /// Every frame, from a device or the fake, comes through here.
+    func handle(_ input: CMSampleBuffer) {
+        let sampleBuffer = processed(input) ?? input
+        if currentDimensions == nil, let format = CMSampleBufferGetFormatDescription(sampleBuffer) {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+            dimensionsLock.withLock { frameDimensions = dimensions }
         }
-        return layer
+        writer.writeVideoSample(sampleBuffer)
+        Self.markForImmediateDisplay(sampleBuffer)
+        if preview.status == .failed { preview.flush() }
+        if preview.isReadyForMoreMediaData { preview.enqueue(sampleBuffer) }
+    }
+
+    /// The frame with the bubble's settings applied, on the same timing.
+    private func processed(_ sampleBuffer: CMSampleBuffer) -> CMSampleBuffer? {
+        guard !processor.isPassthrough, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+        let output = processor.process(pixelBuffer)
+        guard output !== pixelBuffer else { return nil }
+        var timing = CMSampleTimingInfo()
+        guard CMSampleBufferGetSampleTimingInfo(sampleBuffer, at: 0, timingInfoOut: &timing) == noErr else { return nil }
+        return makeSampleBuffer(output, timing: timing)
+    }
+
+    /// Live frames are already late by their capture latency; without this
+    /// the layer would wait for a clock it doesn't have.
+    private static func markForImmediateDisplay(_ sampleBuffer: CMSampleBuffer) {
+        guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true),
+              CFArrayGetCount(attachments) > 0 else { return }
+        let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+        CFDictionarySetValue(
+            dictionary,
+            Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+            Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+        )
     }
 
     private func configureSession(device: AVCaptureDevice) throws {
@@ -382,7 +439,10 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
         session.commitConfiguration()
         input = nil
         output = nil
-        activeDevice = nil
+        fakeSource?.stop()
+        fakeSource = nil
+        dimensionsLock.withLock { frameDimensions = nil }
+        preview.flush(removingDisplayedImage: true, completionHandler: nil)
     }
 
     func captureOutput(
@@ -390,7 +450,7 @@ nonisolated private final class CameraCaptureEngine: NSObject, AVCaptureVideoDat
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        writer.writeVideoSample(sampleBuffer)
+        handle(sampleBuffer)
     }
 }
 

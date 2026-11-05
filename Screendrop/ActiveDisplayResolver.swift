@@ -19,6 +19,19 @@ enum ActiveDisplayResolver {
         return (screen.deviceDescription[key] as? NSNumber)?.uint32Value
     }
 
+    /// The display showing most of a Quartz (top-left) rect: a window take
+    /// names no display, but its pen and pins belong on the window's screen.
+    static func displayID(forQuartzRect rect: CGRect) -> CGDirectDisplayID? {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetDisplaysWithRect(rect, 16, &ids, &count) == .success, count > 0 else { return nil }
+        func overlap(_ id: CGDirectDisplayID) -> CGFloat {
+            let shared = CGDisplayBounds(id).intersection(rect)
+            return shared.width * shared.height
+        }
+        return ids.prefix(Int(count)).max { overlap($0) < overlap($1) }
+    }
+
     static func screen(for displayID: CGDirectDisplayID?) -> NSScreen? {
         guard let displayID else { return nil }
 

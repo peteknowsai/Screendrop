@@ -68,6 +68,8 @@ final class RecordingBarPresenter {
     // MARK: Picker
 
     func togglePicker() {
+        // ⌥4 mid-recording would fold the session controls back into the picker.
+        guard !ScreenRecordingManager.shared.isActive else { return }
         if let panel, panel.isVisible, mode == .picker {
             hide()
         } else {
@@ -119,7 +121,11 @@ final class RecordingBarPresenter {
     }
 
     func hide() {
-        if mode == .picker { CaptureCountdownPresenter.shared.cancel() }
+        if mode == .picker {
+            CaptureCountdownPresenter.shared.cancel()
+            // Backing out of a Claude Code picker leaves the next one a plain recording.
+            if !ScreenRecordingManager.shared.isActive { ScreenRecordingManager.shared.sourceIntent = .screen }
+        }
         RecordingSourceTargetPresenter.shared.cancel()
         RecordingAreaSelectionPresenter.shared.cancel()
         // `orderOut` sends no exit events, so a hover that's live when the
@@ -199,9 +205,10 @@ final class RecordingBarPresenter {
     /// appearance. Reading the camera preference here - on every real
     /// `showPicker()` - is what makes a camera left on from a previous
     /// session warm up immediately instead of needing an off/on toggle.
-    private func warmCameraPreviewIfEnabled() {
+    func warmCameraPreviewIfEnabled() {
         let cameraID = ScreendropPreferences.recordingCameraDeviceID
-        guard !cameraID.isEmpty else { return }
+        // A take for Claude Code records no camera, so none lights up.
+        guard !cameraID.isEmpty, ScreenRecordingManager.shared.sourceIntent != .claude else { return }
         let displayID = ActiveDisplayResolver.activeDisplayID(preferPointer: false)
         Task {
             await CameraRecordingManager.shared.startPreview(deviceID: cameraID, displayID: displayID)

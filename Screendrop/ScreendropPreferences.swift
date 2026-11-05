@@ -17,11 +17,6 @@ enum ScreendropPreferences {
     static let exportFormatKey = "exportFormat"
     static let compressionQualityKey = "compressionQuality"
     static let exportDirectoryPathKey = "exportDirectoryPath"
-    static let fullscreenHotkeyKey = "captureHotkey.fullscreen"
-    static let windowHotkeyKey = "captureHotkey.window"
-    static let areaHotkeyKey = "captureHotkey.area"
-    static let textCaptureHotkeyKey = "captureHotkey.textCapture"
-    static let screenRecordingHotkeyKey = "captureHotkey.screenRecording"
     static let playSoundsKey = "playSounds"
     static let showMenuBarIconKey = "showMenuBarIcon"
     static let includeAppWindowsInCapturesKey = "includeAppWindowsInCaptures"
@@ -41,6 +36,7 @@ enum ScreendropPreferences {
     static let startingToolLastUsed = "lastUsed"
     static let trimFullscreenMenuBarKey = "trimFullscreenMenuBar"
     static let recordingCameraDeviceIDKey = "recordingCameraDeviceID"
+    static let recordingCameraFlipKey = "recordingCameraFlip"
     static let recordingMicrophoneDeviceIDKey = "recordingMicrophoneDeviceID"
     static let recordingSystemAudioKey = "recordingSystemAudio"
     static let recordingStartDelaySecondsKey = "recordingStartDelaySeconds"
@@ -56,6 +52,28 @@ enum ScreendropPreferences {
     static let recordingAreaAspectKey = "recordingAreaAspect"
     /// The last area recorded, so a retake starts from the same framing.
     static let recordingAreaLastSelectionKey = "recordingAreaLastSelection"
+    /// Which source the ready bar's segment is on: a `RecordingSourceMode`.
+    static let recordingSourceModeKey = "recordingSourceMode"
+    /// Display and area recordings leave out the Dock and, for a display,
+    /// the menu bar strip.
+    static let recordingHideMenuBarAndDockKey = "recordingHideMenuBarAndDock"
+    /// Loom's yellow click rings in the shared video. On unless turned off.
+    static let recordingHighlightClicksKey = "recordingHighlightClicks"
+    /// The uploaded video's size: a `RecordingUploadResolution`.
+    static let recordingUploadResolutionKey = "recordingUploadResolution"
+
+    static var recordingHideMenuBarAndDock: Bool {
+        UserDefaults.standard.bool(forKey: recordingHideMenuBarAndDockKey)
+    }
+
+    static var recordingHighlightClicks: Bool {
+        UserDefaults.standard.object(forKey: recordingHighlightClicksKey) as? Bool ?? true
+    }
+
+    static var recordingUploadResolution: RecordingUploadResolution {
+        UserDefaults.standard.string(forKey: recordingUploadResolutionKey)
+            .flatMap(RecordingUploadResolution.init(rawValue:)) ?? .p1080
+    }
 
     private static let defaultCompressionQuality = 0.8
 
@@ -108,6 +126,12 @@ enum ScreendropPreferences {
     }
 
     /// Unique ID of the camera recorded alongside the screen. Empty = camera off.
+    /// Flips the camera left to right on top of its usual mirror view.
+    static var recordingCameraFlip: Bool {
+        get { UserDefaults.standard.bool(forKey: recordingCameraFlipKey) }
+        set { UserDefaults.standard.set(newValue, forKey: recordingCameraFlipKey) }
+    }
+
     static var recordingCameraDeviceID: String {
         get { UserDefaults.standard.string(forKey: recordingCameraDeviceIDKey) ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: recordingCameraDeviceIDKey) }

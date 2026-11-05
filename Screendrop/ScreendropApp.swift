@@ -18,6 +18,9 @@ enum ScreendropMain {
         if AgentRelay.isRequested {
             AgentRelay.run()
         }
+        if LoomAppChecks.isRequested {
+            MainActor.assumeIsolated { LoomAppChecks.run() }
+        }
         ScreendropApp.main()
     }
 }
@@ -104,6 +107,9 @@ struct ScreendropApp: App {
         }
 
         appDelegate.onOpenFiles = { [openWindow] urls in
+            for url in urls where url.scheme == "screendrop" {
+                RecordingProjectOpener.shared.open(link: url)
+            }
             for url in urls where UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true {
                 let historyURL = ScreenshotHistoryStore.shared.importScreenshot(from: url)
                 openWindow(id: "ANNOTATION_EDITOR", value: historyURL)
@@ -119,6 +125,23 @@ struct ScreendropApp: App {
                 // a full-resolution transcode.
                 let historyURL = await ScreenshotHistoryStore.shared.importRecordingSession(session)
                 RecordingProjectStore.shared.reload()
+                if let metadata = session.loadProjectMetadata(),
+                   let cloudID = metadata.cloudID,
+                   let link = metadata.cloudURL {
+                    // Loom's card: the link went to the clipboard at stop.
+                    let itemID = CaptureShelf.shared.addLinkedVideo(url: historyURL, cloudID: cloudID)
+                    if AfterCaptureActions.isEnabled(.showOverlay, for: .recording) {
+                        RecordingLinkCardPresenter.shared.show(
+                            fileURL: historyURL,
+                            link: link,
+                            cloudID: cloudID,
+                            itemID: itemID,
+                            ask: session.loadClaudeLog() != nil ? ClaudeCodeLog.ask(url: link) : nil,
+                            displayID: displayID
+                        )
+                    }
+                    return
+                }
                 CaptureShelf.shared.addVideo(url: historyURL)
                 if AfterCaptureActions.isEnabled(.showOverlay, for: .recording) {
                     CaptureShelfPresenter.shared.show(displayID: displayID)
@@ -131,7 +154,6 @@ struct ScreendropApp: App {
 // MARK: - App Delegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private let updaterManager = UpdaterManager.shared
     private var openedFilesAtLaunch = false
 
     /// Files handed to us via Finder's "Open With" (or `open -a Screendrop`)
@@ -161,7 +183,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if RecordingExportBenchmark.runIfRequested() { return }
         #endif
         HotkeyManager.shared.registerHotkeys()
-        updaterManager.start()
+        // A recording cut short by a crash or quit left its backdrop up.
+        RecordingWallpaper.restore()
         AgentServer.shared.updateForPreference()
         RecordingRecoveryCoordinator.recoverInterruptedRecordings()
         // Indexing is background work; let launch settle first.

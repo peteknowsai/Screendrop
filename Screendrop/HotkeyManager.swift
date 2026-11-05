@@ -20,7 +20,9 @@ final class HotkeyManager {
     private var eventHandlerRef: EventHandlerRef?
     private var hotKeyRefs: [CaptureHotkeyAction: EventHotKeyRef] = [:]
     private(set) var registrationErrors: [CaptureHotkeyAction: String] = [:]
-    
+    /// True while a recording runs: only then do pause and stop hold their keys.
+    private var sessionActive = false
+
     private init() {}
 
     deinit {
@@ -36,12 +38,23 @@ final class HotkeyManager {
         reloadHotkeys()
     }
 
+    func registerSessionHotkeys() {
+        sessionActive = true
+        reloadHotkeys()
+    }
+
+    func unregisterSessionHotkeys() {
+        guard sessionActive else { return }
+        sessionActive = false
+        reloadHotkeys()
+    }
+
     func reloadHotkeys() {
         unregisterHotkeys()
         registrationErrors.removeAll()
 
         var registeredShortcuts: Set<HotkeyShortcut> = []
-        for action in CaptureHotkeyAction.allCases {
+        for action in CaptureHotkeyAction.allCases where sessionActive || !action.isSessionOnly {
             let shortcut = CaptureHotkeyPreferences.shortcut(for: action)
             guard registeredShortcuts.insert(shortcut).inserted else {
                 print("Skipping duplicate hotkey for \(action.title): \(shortcut.displayString)")
@@ -85,6 +98,12 @@ final class HotkeyManager {
     /// rejected shortcut never changes either the preference or old binding.
     func setShortcut(_ shortcut: HotkeyShortcut, for action: CaptureHotkeyAction) throws {
         if shortcut == CaptureHotkeyPreferences.shortcut(for: action), hotKeyRefs[action] != nil { return }
+        if action.isSessionOnly, !sessionActive {
+            // Registered when the next recording starts.
+            CaptureHotkeyPreferences.saveShortcut(shortcut, for: action)
+            registrationErrors[action] = nil
+            return
+        }
         installEventHandlerIfNeeded()
         let newRef = try registerHotKey(action: action, shortcut: shortcut)
         if let oldRef = hotKeyRefs[action] { UnregisterEventHotKey(oldRef) }

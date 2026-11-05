@@ -129,7 +129,7 @@ struct StudioActionFooter: View {
 
     private var shareCapsule: some View {
         GlassActionCapsule(
-            title: "Share",
+            title: model.sharedLinkID == nil ? "Share" : "Update video",
             systemImage: "link",
             progress: shareProgress?.progress,
             stage: shareProgress?.stage,
@@ -146,7 +146,8 @@ struct StudioActionFooter: View {
         .glassEffectID("share", in: glass)
         .popover(isPresented: $isShareOptionsPresented, arrowEdge: .top) {
             CloudUploadOptionsPopover(
-                suggestedTitle: model.projectDisplayName,
+                suggestedTitle: model.sharedLinkID == nil ? model.projectDisplayName : "",
+                isUpdate: model.sharedLinkID != nil,
                 onConfirm: model.shareToCloud
             )
         }

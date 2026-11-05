@@ -45,6 +45,11 @@ final class CloudUploader: NSObject {
     /// Active upload tasks keyed by item ID (for cancellation).
     private var activeTasks: [UUID: Task<CloudUploadResult, any Error>] = [:]
 
+    /// One upload per reserved link at a time: a newer one (a Studio update)
+    /// cancels the older, so a slow first upload never lands after it.
+    private var uploadsByCloudID: [String: Task<CloudUploadResult, any Error>] = [:]
+    private var cloudIDGeneration: [String: Int] = [:]
+
     private override init() {
         super.init()
     }
@@ -53,14 +58,71 @@ final class CloudUploader: NSObject {
         CloudCredentialStore.shared.isConfigured
     }
 
+    /// Loom's link at record start: an id and a URL for a file that lands later.
+    func reserve(mediaType: String, privacy: String, sourceMode: String) async throws -> CloudUploadResult {
+        let creds = CloudCredentialStore.shared.snapshot()
+        guard creds.isConfigured else { throw CloudUploadError.notConfigured }
+        guard let url = URL(string: "\(Self.normalizeWorkerURL(creds.workerURL))/api/uploads/reserve") else {
+            throw CloudUploadError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        // Short, because stopping a take waits on it.
+        request.timeoutInterval = 5
+        let token = creds.uploadToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "mediaType": mediaType, "privacy": privacy, "sourceMode": sourceMode,
+            "socialEnabled": CloudUploadPreferences.lastSocialEnabled,
+        ] as [String: Any])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw CloudUploadError.invalidResponse }
+        guard http.statusCode == 201 else {
+            throw CloudUploadError.serverError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let id = json?["id"] as? String, let link = json?["url"] as? String else {
+            throw CloudUploadError.invalidResponse
+        }
+        return CloudUploadResult(id: id, url: link, filename: "", size: 0)
+    }
+
+    /// X-Privacy for an upload: none behind an existing link, which keeps
+    /// its own; only you for a take recorded for Claude Code.
+    nonisolated static func uploadPrivacy(isVideo: Bool, existingID: String?, claudeTake: Bool, stored: String) -> String? {
+        guard isVideo, existingID == nil else { return nil }
+        return claudeTake ? "private" : stored
+    }
+
+    /// `existingID` puts the file behind a link that already exists;
+    /// `keepsTitle` leaves that link's title as it is.
     func upload(
         itemID: UUID,
         fileURL: URL,
         title: String? = nil,
-        socialEnabled: Bool = true
+        socialEnabled: Bool = true,
+        existingID: String? = nil,
+        keepsTitle: Bool = false
     ) async throws -> CloudUploadResult {
         guard isConfigured else {
             throw CloudUploadError.notConfigured
+        }
+
+        let creds = CloudCredentialStore.shared.snapshot()
+        let generation = existingID.map { (cloudIDGeneration[$0] ?? 0) + 1 } ?? 0
+        let reporter = existingID.flatMap { id in
+            URL(string: "\(Self.normalizeWorkerURL(creds.workerURL))/api/uploads/\(id)").map {
+                UploadProgressReporter(url: $0, token: creds.uploadToken.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        if let existingID {
+            cloudIDGeneration[existingID] = generation
+            uploadsByCloudID[existingID]?.cancel()
+        }
+        /// Whether a newer upload to the same link has started since.
+        func isSuperseded() -> Bool {
+            existingID.map { cloudIDGeneration[$0] != generation } ?? false
         }
 
         // The Dock mirrors the whole span - the deliverable render (when
@@ -72,23 +134,33 @@ final class CloudUploader: NSObject {
         // deliverable first (cached until the edits change).
         var fileURL = fileURL
         let sessionDirectory = fileURL.deletingLastPathComponent()
-        if RecordingSession.isSessionDirectory(sessionDirectory) {
+        // A render is the first half of the bar, the upload the second.
+        let rendersFirst = RecordingSession.isSessionDirectory(sessionDirectory)
+        if rendersFirst {
             uploadingItems.insert(itemID)
             uploadProgress[itemID] = 0
             do {
                 fileURL = try await RecordingSessionRenderer.ensureDeliverable(
-                    for: RecordingSession(directoryURL: sessionDirectory)
+                    for: RecordingSession(directoryURL: sessionDirectory),
+                    onProgress: { [weak self] fraction in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.uploadingItems.contains(itemID) else { return }
+                            self.uploadProgress[itemID] = fraction / 2
+                            DockExportProgressCoordinator.shared.update(dockProgressID, progress: fraction / 2)
+                            reporter?.report(render: fraction)
+                        }
+                    }
                 )
+                if isSuperseded() { throw CancellationError() }
             } catch {
                 DockExportProgressCoordinator.shared.finish(dockProgressID)
                 uploadingItems.remove(itemID)
                 uploadProgress.removeValue(forKey: itemID)
-                failedItemIDs.insert(itemID)
+                if !(error is CancellationError) { failedItemIDs.insert(itemID) }
                 throw error
             }
         }
 
-        let creds = CloudCredentialStore.shared.snapshot()
         let fileName = fileURL.lastPathComponent
         let mimeType = mimeTypeForFile(fileURL)
         let isVideo = mimeType.hasPrefix("video/")
@@ -104,8 +176,26 @@ final class CloudUploader: NSObject {
             duration = nil
         }
 
+        // No await from here to registering the task, so a newer upload
+        // either superseded this one already or will find it and cancel it.
+        if isSuperseded() {
+            DockExportProgressCoordinator.shared.finish(dockProgressID)
+            uploadingItems.remove(itemID)
+            uploadProgress.removeValue(forKey: itemID)
+            throw CancellationError()
+        }
+
         uploadingItems.insert(itemID)
-        uploadProgress[itemID] = 0
+        uploadProgress[itemID] = rendersFirst ? 0.5 : 0
+        let uploadBase = rendersFirst ? 0.5 : 0
+        // The ready bar's lock; a reserved link already has its privacy. A
+        // take for Claude Code starts as only you even when its reserve failed.
+        let claudeTake = isVideo && rendersFirst
+            && RecordingSession(directoryURL: sessionDirectory).loadClaudeLog() != nil
+        let privacy = Self.uploadPrivacy(
+            isVideo: isVideo, existingID: existingID, claudeTake: claudeTake,
+            stored: RecordingPrivacyChoice.stored().apiValue
+        )
 
         let uploadTask = Task { [weak self] () throws -> CloudUploadResult in
             let result = try await Self.streamUpload(
@@ -118,14 +208,19 @@ final class CloudUploader: NSObject {
                 duration: duration,
                 title: title,
                 socialEnabled: socialEnabled,
+                existingID: existingID,
+                privacy: privacy,
+                sourceMode: claudeTake && existingID == nil ? "claude" : nil,
                 creds: creds,
                 progress: { [weak self] fraction in
                     Task { @MainActor [weak self] in
-                        self?.uploadProgress[itemID] = fraction
+                        let combined = uploadBase + (1 - uploadBase) * fraction
+                        self?.uploadProgress[itemID] = combined
                         DockExportProgressCoordinator.shared.update(
                             dockProgressID,
-                            progress: fraction
+                            progress: combined
                         )
+                        reporter?.report(upload: fraction)
                     }
                 }
             )
@@ -134,6 +229,10 @@ final class CloudUploader: NSObject {
         }
 
         activeTasks[itemID] = uploadTask
+        if let existingID { uploadsByCloudID[existingID] = uploadTask }
+        defer {
+            if let existingID, !isSuperseded() { uploadsByCloudID[existingID] = nil }
+        }
 
         do {
             let result = try await uploadTask.value
@@ -143,7 +242,12 @@ final class CloudUploader: NSObject {
             uploadProgress.removeValue(forKey: itemID)
             uploadedURLs[itemID] = result.url
             if isVideo {
-                scheduleSidecarUpload(uploadID: result.id, fileURL: fileURL, title: title, creds: creds)
+                scheduleSidecarUpload(
+                    uploadID: result.id, generation: generation, fileURL: fileURL,
+                    title: title, keepsTitle: keepsTitle, creds: creds
+                )
+            } else {
+                scheduleSearchText(uploadID: result.id, fileURL: fileURL, creds: creds)
             }
             return result
         } catch is CancellationError {
@@ -165,12 +269,30 @@ final class CloudUploader: NSObject {
     /// Ships the share-page extras (poster, title, transcript) after the
     /// video itself is up. Best-effort and detached: the share link is
     /// already usable, sidecars enrich the page when they land.
-    private func scheduleSidecarUpload(uploadID: String, fileURL: URL, title: String?, creds: CloudCredentials) {
+    private func scheduleSidecarUpload(
+        uploadID: String,
+        generation: Int,
+        fileURL: URL,
+        title: String?,
+        keepsTitle: Bool,
+        creds: CloudCredentials
+    ) {
         let item = ScreenshotHistoryStore.shared.items.first {
             $0.url.standardizedFileURL == fileURL.standardizedFileURL
         }
         let sessionDirectory = item?.recordingSession?.directoryURL
         let createdAt = item?.createdAt ?? Date()
+        // A Studio update to the same link makes these sidecars stale: the
+        // transcript and frames would describe the cut it replaced.
+        let isCurrent: @MainActor @Sendable () -> Bool = { [weak self] in
+            (self?.cloudIDGeneration[uploadID] ?? 0) == generation
+        }
+        // Editing in Studio drops this render; a hard link keeps its bytes
+        // for the poster and frames until they're sent.
+        let pinned = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sidecar-\(UUID().uuidString)")
+            .appendingPathExtension(fileURL.pathExtension)
+        let movieURL = (try? FileManager.default.linkItem(at: fileURL, to: pinned)) != nil ? pinned : nil
         Task.detached(priority: .utility) {
             await CloudSidecarUploader.uploadVideoSidecars(
                 uploadID: uploadID,
@@ -178,8 +300,23 @@ final class CloudUploader: NSObject {
                 sessionDirectory: sessionDirectory,
                 createdAt: createdAt,
                 customTitle: title,
+                keepsTitle: keepsTitle,
+                isCurrent: isCurrent,
+                movieURL: movieURL,
                 creds: creds
             )
+            if let movieURL { try? FileManager.default.removeItem(at: movieURL) }
+        }
+    }
+
+    /// A screenshot's text, when the Library has already read it; the
+    /// Library sends it itself when it reads the screenshot later.
+    private func scheduleSearchText(uploadID: String, fileURL: URL, creds: CloudCredentials) {
+        let standardized = fileURL.standardizedFileURL
+        guard let item = ScreenshotHistoryStore.shared.items.first(where: { $0.url.standardizedFileURL == standardized }),
+              let text = CaptureLibraryIndex.shared.analyses[item.id.uuidString]?.text, !text.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            await CloudSidecarUploader.uploadSearchText(uploadID: uploadID, text: text, creds: creds)
         }
     }
 
@@ -199,6 +336,29 @@ final class CloudUploader: NSObject {
 
     func clearFailed(for itemID: UUID) {
         failedItemIDs.remove(itemID)
+    }
+
+    // MARK: - Privacy
+
+    /// Who can watch, changed from the Mac with the upload token.
+    func setPrivacy(_ privacy: String, uploadID: String) async throws {
+        let creds = CloudCredentialStore.shared.snapshot()
+        guard creds.isConfigured else { throw CloudUploadError.notConfigured }
+        guard let url = URL(string: "\(Self.normalizeWorkerURL(creds.workerURL))/api/uploads/\(uploadID)") else {
+            throw CloudUploadError.invalidURL
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "PATCH"
+        request.timeoutInterval = 15
+        let token = creds.uploadToken.trimmingCharacters(in: .whitespacesAndNewlines)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["privacy": privacy])
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw CloudUploadError.invalidResponse }
+        guard http.statusCode == 200 else {
+            throw CloudUploadError.serverError(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
     }
 
     // MARK: - Delete
@@ -254,6 +414,9 @@ final class CloudUploader: NSObject {
         duration: Double?,
         title: String?,
         socialEnabled: Bool,
+        existingID: String?,
+        privacy: String?,
+        sourceMode: String?,
         creds: CloudCredentials,
         progress: (@Sendable (Double) -> Void)?
     ) async throws -> CloudUploadResult {
@@ -280,6 +443,10 @@ final class CloudUploader: NSObject {
             request.setValue(encoded, forHTTPHeaderField: "X-Title")
         }
         request.setValue(socialEnabled ? "true" : "false", forHTTPHeaderField: "X-Social-Enabled")
+        // Multipart copies these headers onto its create and part requests.
+        if let existingID { request.setValue(existingID, forHTTPHeaderField: "X-Upload-Id") }
+        if let privacy { request.setValue(privacy, forHTTPHeaderField: "X-Privacy") }
+        if let sourceMode { request.setValue(sourceMode, forHTTPHeaderField: "X-Source-Mode") }
 
         let progressDelegate = UploadProgressDelegate { sent, expected in
             guard expected > 0 else { return }
@@ -323,7 +490,7 @@ final class CloudUploader: NSObject {
 
     // MARK: - Helpers
 
-    nonisolated private static func normalizeWorkerURL(_ raw: String) -> String {
+    nonisolated static func normalizeWorkerURL(_ raw: String) -> String {
         let trimmed = raw
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))

@@ -6,7 +6,10 @@ struct VideoSettingsPane: View {
 
     var body: some View {
         SettingsPage {
-            CaptureHotkeySettingsSection(actions: [.screenRecording])
+            CaptureHotkeySettingsSection(actions: [
+                .recordDisplay, .recordWindow, .recordArea, .recordCameraOnly, .recordForClaude,
+                .pauseResume, .stopRecording, .screenRecording,
+            ])
 
             AfterCaptureActionsSection(type: .recording, title: "After Recording")
 

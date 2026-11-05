@@ -7,8 +7,6 @@ import AppKit
 import SwiftUI
 
 struct SettingsAboutPane: View {
-    @ObservedObject private var updaterManager = UpdaterManager.shared
-
     private var versionText: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String
@@ -46,11 +44,6 @@ struct SettingsAboutPane: View {
 
                     GlassEffectContainer(spacing: GlassMetrics.containerSpacing) {
                         HStack(spacing: GlassMetrics.gap) {
-                            SettingsButton("Check for Updates", systemImage: "arrow.down.circle", isProminent: true) {
-                                updaterManager.checkForUpdates()
-                            }
-                            .disabled(!updaterManager.canCheckForUpdates)
-
                             SettingsButton("GitHub", systemImage: "chevron.left.forwardslash.chevron.right") {
                                 open("https://github.com/fayazara/screendrop")
                             }
@@ -64,19 +57,6 @@ struct SettingsAboutPane: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, Space.xxl)
-            }
-
-            Section("Updates") {
-                Toggle(isOn: Binding(
-                    get: { updaterManager.automaticallyChecksForUpdates },
-                    set: { updaterManager.automaticallyChecksForUpdates = $0 }
-                )) {
-                    SettingsControlLabel(
-                        "Check for updates automatically",
-                        detail: "Screendrop looks for a new version in the background and asks before installing it."
-                    )
-                }
-                .toggleStyle(.ink)
             }
 
             Section {

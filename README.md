@@ -31,6 +31,35 @@ https://github.com/user-attachments/assets/c8d5636a-b03d-4b97-9ef1-e775df75117a
 </p>
 
 
+## This fork
+
+This is Pete's fork of [fayazara/Screendrop](https://github.com/fayazara/Screendrop), reworked to record and share the way Loom does, with Claude Code standing in for Loom's AI. It pairs with the fork of the worker at [peteknowsai/screendrop-worker](https://github.com/peteknowsai/screendrop-worker).
+
+What changed:
+
+- **Recording.** Loom's menu and shortcuts, the ready bar with its More menu and countdown, the recording pill, a live camera bubble with filters and backgrounds, and a pen that draws on screen while you record.
+- **The link at stop.** A share link is reserved when the take starts and is on the clipboard when it stops. The video renders and uploads into that link while a card shows the progress, who can watch, and Open, Preview, Copy link and More.
+- **One plain render.** Recordings come out of the box without Studio's styling, so a take looks like what was on screen. Studio is still there for edits, and its Share updates the video behind the same link.
+- **Record for Claude Code.** A take made for Claude Code drops the camera, starts as only you, numbers every click and logs the app, window and page it landed on. Point pins a labelled spot. At stop the clipboard holds a ready-to-paste ask for Claude Code.
+- **What Claude Code reads.** Every upload also sends stills chosen at scene changes and clicks, the transcript, and the screen's text, which the worker's MCP endpoint serves to Claude Code.
+- **Open on Mac.** The share page's Open on Mac buttons open `screendrop://studio?id=<id>`, which brings up that recording in Studio; `&tool=cleanup` opens its filler-word tools.
+
+### Building and installing it
+
+```bash
+scripts/build-local.sh            # Release build into build/
+scripts/build-local.sh --install  # also replaces /Applications/Screendrop.app
+```
+
+The build is signed with the team in the project file and keeps the bundle id `com.fayazahmed.Screendrop`, so it takes the place of an upstream install along with its library and settings. macOS asks again for Screen Recording, Camera, Microphone and Input Monitoring the first time it opens.
+
+Automatic updates are off. Sparkle would replace this build with upstream's release, so the fork updates by pulling upstream and building again:
+
+```bash
+git fetch upstream && git merge upstream/main
+scripts/build-local.sh --install
+```
+
 ## Features
 
 - Capture a display, window, or selected area as a screenshot or recording.

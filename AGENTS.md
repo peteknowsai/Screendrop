@@ -27,7 +27,7 @@ There are two shared schemes, both building the same target:
 
 `-configuration` overrides the scheme's own, so build the Dev scheme with `-configuration "Debug Dev"` (or leave the flag off). With `-configuration Debug` it quietly builds `Screendrop.app` instead and leaves `Screendrop Dev.app` stale.
 
-No test target exists. Build success is the only automated verification.
+No test target exists. Besides the build, `scripts/check-loom-parity.sh` is the automated check; see Loom parity fork below.
 
 ## Swift concurrency settings
 
@@ -83,3 +83,14 @@ Make atomic commits. Each commit should represent exactly one logical change (e.
 - Screen recording permission (`NSScreenCaptureUsageDescription` in Info.plist) is required.
 - Hardened runtime is enabled.
 - No App Sandbox - do not add sandbox entitlements.
+
+## Loom parity fork
+
+This fork reworks recording and sharing after Loom; README.md's "This fork" lists what changed. Notes for working on it:
+
+- **Checks.** `scripts/check-loom-parity.sh` compiles the pure helpers listed on its `swiftc` line together with `scripts/check-loom-parity.swift` and runs them. Given a built app, `scripts/check-loom-parity.sh "<path>/Screendrop Dev.app"` also runs `LoomAppChecks.swift` inside the app module: the binary started with `--loom-checks` prints and exits before any UI. A new pure helper goes on the `swiftc` line with its check in the `.swift` file; a check that needs app types goes in `LoomAppChecks`. Pure helpers are marked `nonisolated`, since the default isolation is the main actor.
+- **Shared Application Support.** The Dev and release builds share `~/Library/Application Support/Screendrop`: History, Recordings, the Library index and wallpapers. Running `Screendrop Dev.app` on a Mac with the release build installed reads and writes the same library. Permissions are separate, the data is not.
+- **Mac QA runs in the workbench VM**, never on Pete's own screen. Copy the Dev build into the VM and drive it there. The VM has no camera; set `SCREENDROP_FAKE_CAMERA` to a movie path in the environment or in the app's defaults, and Debug builds offer it as a camera that loops that movie.
+- **Builds for Pete** go through `scripts/build-local.sh --install`, which keeps the bundle id, signs with the team in the project file, and replaces `/Applications/Screendrop.app`. Automatic updates are off on purpose; upstream changes come in with `git fetch upstream && git merge upstream/main`.
+- **The worker contract** lives in the worker fork's docs. The app speaks to it through `CloudUploader` for reserve, upload, progress and privacy, `CloudSidecarUploader` for the poster, transcript, Claude Code log and search text, and `CloudFrameUploader` for the stills.
+

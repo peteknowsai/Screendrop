@@ -17,6 +17,17 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>Screendrop Studio link</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>screendrop</string>
+			</array>
+		</dict>
+	</array>
 	<key>LSEnvironment</key>
 	<dict>
 		<key>MallocLargeCache</key>
@@ -32,12 +43,6 @@
 	<false/>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Screendrop needs screen recording permission to capture screenshots.</string>
-	<key>SUEnableInstallerLauncherService</key>
-	<true/>
-	<key>SUFeedURL</key>
-	<string>https://raw.githubusercontent.com/fayazara/screendrop/main/appcast.xml</string>
-	<key>SUPublicEDKey</key>
-	<string>MA/6n0fqT0T2updDlkXr8BjhJKoHWik9uf6Lh5pUG7U=</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

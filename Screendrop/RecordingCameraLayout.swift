@@ -44,6 +44,8 @@ nonisolated struct RecordingCameraLayout: Codable, Hashable, Sendable {
         case square
         /// 3:4, taller than wide.
         case portrait
+        /// 3:2, the recorder bubble's wide shape.
+        case landscape
     }
 
     enum Side: String, Codable, CaseIterable, Sendable {
@@ -117,6 +119,27 @@ nonisolated struct RecordingCameraLayout: Codable, Hashable, Sendable {
 
     static let screenOnly = RecordingCameraLayout(kind: .screen)
     static let cameraOnly = RecordingCameraLayout(kind: .camera)
+
+    /// The recorder's bubble as a layout, so the render puts the camera
+    /// where you saw it.
+    init(bubble: BubbleCameraPlacement) {
+        if bubble.fillsFrame {
+            self = .cameraOnly
+            return
+        }
+        let shape: Shape = switch bubble.shape {
+        case .roundedSquare: .square
+        case .circle: .circle
+        case .landscape: .landscape
+        case .portrait: .portrait
+        }
+        self.init(
+            kind: .pictureInPicture,
+            corner: Corner(rawValue: bubble.corner.rawValue) ?? .bottomLeading,
+            shape: shape,
+            size: bubble.size
+        )
+    }
 
     var showsCamera: Bool { kind != .screen }
     var showsScreen: Bool { kind != .camera }
@@ -214,6 +237,7 @@ extension RecordingCameraLayout {
             case .circle: "Circle"
             case .square: "Bubble"
             case .portrait: "Portrait"
+            case .landscape: "Landscape"
             }
         case .split: "Split"
         case .cutout: "Cutout"
@@ -521,7 +545,11 @@ nonisolated struct RecordingCameraLayoutResolver: Sendable {
         scale: CGFloat = 1
     ) -> (rect: CGRect, radius: CGFloat) {
         let requested = CGFloat(layout.size) * minDimension
-        let aspect: CGFloat = layout.shape == .portrait ? 3 / 4 : 1
+        let aspect: CGFloat = switch layout.shape {
+        case .portrait: 3 / 4
+        case .landscape: 3 / 2
+        case .circle, .square: 1
+        }
         // Never let the camera outgrow the card it sits in.
         let maxWidth = max(24, min(card.width - margin * 2, (card.height - margin * 2) * aspect) * 0.62)
         // Shrinks toward its corner: the margins stay put.

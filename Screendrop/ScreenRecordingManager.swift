@@ -108,11 +108,13 @@ nonisolated struct ScreenRecordingCaptureOptions: Sendable {
     var capturesSystemAudio = false
     var microphoneDeviceID: String?
     var cameraDeviceID: String?
+    var hidesMenuBarAndDock = false
 
     @MainActor
     static func fromPreferences() -> ScreenRecordingCaptureOptions {
         var options = ScreenRecordingCaptureOptions()
         options.capturesSystemAudio = ScreendropPreferences.recordingSystemAudio
+        options.hidesMenuBarAndDock = ScreendropPreferences.recordingHideMenuBarAndDock
         let micID = ScreendropPreferences.recordingMicrophoneDeviceID
         options.microphoneDeviceID = micID.isEmpty ? nil : micID
         let cameraID = ScreendropPreferences.recordingCameraDeviceID
@@ -127,15 +129,26 @@ final class ScreenRecordingManager {
     static let shared = ScreenRecordingManager()
 
     var state: ScreenRecordingState = .idle
+    /// What the next or current recording is for, set by the entry point
+    /// that opened the recorder. Back to `.screen` once a recording ends.
+    var sourceIntent: RecordingSourceIntent = .screen
+    /// Muted mic audio is dropped, not recorded and silenced later.
+    var isMicMuted = false {
+        didSet { writer.setMicrophoneMuted(isMicMuted) }
+    }
     var elapsedTime: TimeInterval = 0
     var errorMessage: String?
     var onFinishRecording: ((RecordingSession, CGDirectDisplayID?) -> Void)?
+
+    /// Loom's link at record start: reserved as the take begins, copied the
+    /// moment it stops. A restart keeps it for the new take.
+    private var linkReservation: Task<CloudUploadResult?, Never>?
 
     private let capture = ScreenRecordingCapture()
     private let writer = ScreenRecordingWriter()
     private let pointerActivityRecorder = PointerActivityRecorder()
     private let keystrokeRecorder = RecordingKeystrokeRecorder()
-    private var displayID: CGDirectDisplayID?
+    private(set) var displayID: CGDirectDisplayID?
     private var session: RecordingSession?
     var activeSessionDirectoryURL: URL? { isActive ? session?.directoryURL : nil }
     private var manifest = CaptureManifest()
@@ -182,12 +195,27 @@ final class ScreenRecordingManager {
 
         Task {
             do {
-                let requestedOptions = ScreenRecordingCaptureOptions.fromPreferences()
+                var requestedOptions = ScreenRecordingCaptureOptions.fromPreferences()
+                // Claude Code reads the screen; a face would only cover it,
+                // so the ready bar's warm preview goes off too.
+                if sourceIntent == .claude {
+                    requestedOptions.cameraDeviceID = nil
+                    await CameraRecordingManager.shared.stopPreview()
+                }
                 let (options, inputWarnings) = await Self.resolveCaptureOptions(requestedOptions)
                 guard state == .starting, !isStopping else { return }
 
                 if !inputWarnings.isEmpty {
                     Self.presentInputWarnings(inputWarnings)
+                }
+
+                // Display and area only: a window recording never shows the desktop.
+                if source.displayID != nil, let screen = ActiveDisplayResolver.screen(for: targetDisplayID) {
+                    do {
+                        try RecordingWallpaper.apply(RecordingWallpaper.stored(), to: screen)
+                    } catch {
+                        NSLog("[Screendrop] Could not set the recording background: \(error)")
+                    }
                 }
 
                 // The teleprompter session starts before the capture wires
@@ -213,6 +241,8 @@ final class ScreenRecordingManager {
                     includesSystemAudio: options.capturesSystemAudio,
                     includesMicrophone: options.microphoneDeviceID != nil
                 )
+                // Setup clears the writer's mute; a mute pressed while starting holds.
+                writer.setMicrophoneMuted(isMicMuted)
 
                 capture.onVideoFrame = { [writer, pointerActivityRecorder] sampleBuffer in
                     pointerActivityRecorder.recordFrameGeometry(sampleBuffer)
@@ -288,6 +318,24 @@ final class ScreenRecordingManager {
                 accumulatedPauseDuration = 0
                 elapsedTime = 0
                 state = .recording
+                reserveLinkIfNeeded()
+                let overlayDisplayID = target.displayID
+                    ?? ActiveDisplayResolver.displayID(forQuartzRect: target.inputMapping.captureRect)
+                if sourceIntent == .claude {
+                    ClaudeCodeRecorder.shared.begin(
+                        captureRect: target.inputMapping.captureRect,
+                        displayID: overlayDisplayID
+                    )
+                }
+                // The last take's card would only be in the way now.
+                RecordingLinkCardPresenter.shared.hide()
+                if sourceIntent != .cameraOnly {
+                    PenOverlayController.shared.begin(
+                        displayID: overlayDisplayID,
+                        captureRect: Self.quartzRect(fromAppKitRect: target.inputMapping.captureRect)
+                    )
+                }
+                HotkeyManager.shared.registerSessionHotkeys()
                 beginActivity()
                 startTimer()
             } catch {
@@ -313,6 +361,8 @@ final class ScreenRecordingManager {
         pausedAt = Date()
         state = .paused
         updateElapsedTime()
+        RecordingPausedToast.shared.show(displayID: displayID)
+        CameraBubblePanel.shared.isPaused = true
     }
 
     func resumeRecording() {
@@ -330,6 +380,8 @@ final class ScreenRecordingManager {
         TeleprompterController.shared.setPaused(false)
         state = .recording
         updateElapsedTime()
+        RecordingPausedToast.shared.hide()
+        CameraBubblePanel.shared.isPaused = false
     }
 
     func restartRecording() {
@@ -381,13 +433,50 @@ final class ScreenRecordingManager {
 
             let cameraResult = await CameraRecordingManager.shared.stop()
             let result = await writer.finishWriting()
-            finalizeSession(result: result, cameraResult: cameraResult)
+            let link = await linkReservation?.value
+            finalizeSession(result: result, cameraResult: cameraResult, link: link)
         }
     }
 
-    private func finalizeSession(result: ScreenRecordingWriterResult, cameraResult: CameraRecordingResult?) {
+    private func reserveLinkIfNeeded() {
+        guard linkReservation == nil,
+              CloudUploader.shared.isConfigured,
+              AfterCaptureActions.isEnabled(.upload, for: .recording) else { return }
+        let mode = switch sourceIntent {
+        case .screen: "screen"
+        case .cameraOnly: "camera"
+        case .claude: "claude"
+        }
+        // Takes for Claude Code start as only you.
+        let privacy = sourceIntent == .claude ? "private" : RecordingPrivacyChoice.stored().apiValue
+        linkReservation = Task {
+            // Offline or an older worker: the upload makes its own link at stop.
+            try? await CloudUploader.shared.reserve(mediaType: "video", privacy: privacy, sourceMode: mode)
+        }
+    }
+
+    /// The take owns the reserved link now: in project.json for uploads and
+    /// Studio's updates, and on the clipboard at once.
+    private func keepLink(_ link: CloudUploadResult, in session: RecordingSession, copies: Bool) {
+        var metadata = session.loadProjectMetadata() ?? RecordingProjectMetadata()
+        metadata.cloudID = link.id
+        metadata.cloudURL = link.url
+        session.writeProjectMetadata(metadata)
+        guard copies else { return }
+        NSPasteboard.general.clearContents()
+        // For Claude Code, the whole ask is what gets pasted.
+        let text = session.loadClaudeLog() != nil ? ClaudeCodeLog.ask(url: link.url) : link.url
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+
+    private func finalizeSession(
+        result: ScreenRecordingWriterResult,
+        cameraResult: CameraRecordingResult?,
+        link: CloudUploadResult?
+    ) {
         let action = finishAction
         let restartSource = currentSource
+        let restartIntent = sourceIntent
         let restartDisplayID = displayID
         let session = session
         let terminationCompletion = terminationCompletion
@@ -427,6 +516,32 @@ final class ScreenRecordingManager {
                     "The screen footage was saved, but some Studio metadata could not be saved."
                 )
             }
+            if action == .preview || action == .terminate {
+                var numbersAndPins: [RecordingTextOverlay] = []
+                if restartIntent == .claude {
+                    let log = ClaudeCodeRecorder.shared.finish()
+                    numbersAndPins = log.textOverlays()
+                    do {
+                        try session.writeClaudeLog(log)
+                    } catch {
+                        NSLog("[Screendrop] Failed to save the Claude Code log: \(error)")
+                    }
+                }
+                writeStartingEdit(
+                    to: session,
+                    hasCamera: cameraResult != nil,
+                    intent: restartIntent,
+                    textOverlays: numbersAndPins
+                )
+                if let link { keepLink(link, in: session, copies: action == .preview) }
+            }
+        }
+
+        let keepsLinkForRestart = action == .restart && session != nil && result.fileIsUsable
+        if !keepsLinkForRestart { linkReservation = nil }
+        if let link, action == .discard || session == nil || !result.fileIsUsable {
+            // No orphan "Uploading" row on the worker.
+            Task { try? await CloudUploader.shared.deleteFromCloud(uploadID: link.id) }
         }
 
         cleanupAfterRecording()
@@ -478,12 +593,73 @@ final class ScreenRecordingManager {
         case .restart:
             RecordingSessionStore.deleteSession(session)
             if let restartSource {
+                sourceIntent = restartIntent
                 startRecording(source: restartSource)
             }
         case .terminate:
             RecordingControlPresenter.shared.hide()
             RecordingAreaHighlightPresenter.shared.hide()
             terminationCompletion?(session)
+        }
+    }
+
+    /// Loom's plain look for the take, with the bubble where it was. A
+    /// failure only costs the take its plain look; Studio's defaults apply.
+    private func writeStartingEdit(
+        to session: RecordingSession,
+        hasCamera: Bool,
+        intent: RecordingSourceIntent,
+        textOverlays: [RecordingTextOverlay] = []
+    ) {
+        let scale = max(manifest.pixelScale, 1)
+        let camera = CameraRecordingManager.shared
+        let captureSize = CGSize(
+            width: CGFloat(manifest.pixelWidth) / CGFloat(scale),
+            height: CGFloat(manifest.pixelHeight) / CGFloat(scale)
+        )
+        let document = LoomEditDocument.make(input: .init(
+            captureSizeInPoints: captureSize,
+            hasCamera: hasCamera,
+            bubble: CameraBubblePanel.shared.state,
+            hiddenIntervals: camera.hiddenIntervals,
+            fullIntervals: camera.fullIntervals,
+            highlightClicks: ScreendropPreferences.recordingHighlightClicks,
+            resolution: ScreendropPreferences.recordingUploadResolution,
+            intent: intent,
+            imageOverlays: penOverlays(in: session, captureSize: captureSize),
+            textOverlays: textOverlays
+        ))
+        do {
+            try session.writeStartingDocument(document)
+        } catch {
+            NSLog("[Screendrop] Failed to save the take's starting edit: \(error)")
+        }
+    }
+
+    /// One PNG under media/ and one image overlay per pen stroke, each
+    /// covering the whole frame.
+    /// ponytail: placed on the canvas, so padding added in Studio shifts the
+    /// ink off the footage; place on the screen layer if that bites.
+    private func penOverlays(in session: RecordingSession, captureSize: CGSize) -> [RecordingImageOverlay] {
+        let strokes = PenOverlayController.shared.takeStrokes()
+        guard !strokes.isEmpty, captureSize.width > 0, captureSize.height > 0 else { return [] }
+        let media = session.directoryURL.appendingPathComponent("media", isDirectory: true)
+        try? FileManager.default.createDirectory(at: media, withIntermediateDirectories: true)
+        // Overlay images are decoded at 1600 px at most.
+        let scale = min(2, 1600 / max(captureSize.width, captureSize.height))
+        let canvas = CGSize(width: captureSize.width * scale, height: captureSize.height * scale)
+        return strokes.enumerated().compactMap { index, stroke in
+            let name = "pen-\(UUID().uuidString).png"
+            guard let png = renderPNG([stroke], canvas: canvas, lineWidth: PenStroke.lineWidth * scale),
+                  (try? png.write(to: media.appendingPathComponent(name))) != nil else { return nil }
+            let times = penOverlayTimes(stroke)
+            var overlay = RecordingImageOverlay(
+                fileName: name, displayName: "Pen stroke \(index + 1)", start: times.start, end: times.end
+            )
+            overlay.width = 1
+            overlay.aspect = captureSize.width / captureSize.height
+            overlay.fadeOut = 0.4
+            return overlay
         }
     }
 
@@ -523,6 +699,15 @@ final class ScreenRecordingManager {
         if let session {
             RecordingSessionStore.deleteSession(session)
         }
+        // A link kept through Restart belongs to a take that never came.
+        if let reservation = linkReservation {
+            linkReservation = nil
+            Task {
+                if let link = await reservation.value {
+                    try? await CloudUploader.shared.deleteFromCloud(uploadID: link.id)
+                }
+            }
+        }
         cleanupAfterRecording()
         errorMessage = "Failed to start screen recording: \(error.localizedDescription)"
         RecordingControlPresenter.shared.hide()
@@ -555,7 +740,7 @@ final class ScreenRecordingManager {
             }
         }
 
-        if let cameraID = requested.cameraDeviceID {
+        if let cameraID = requested.cameraDeviceID, !FakeCamera.isFake(cameraID) {
             if RecordingDeviceCatalog.camera(withID: cameraID) == nil {
                 resolved.cameraDeviceID = nil
                 ScreendropPreferences.recordingCameraDeviceID = ""
@@ -661,6 +846,18 @@ final class ScreenRecordingManager {
         }
     }
 
+    /// Seconds into the take with pauses taken out, the clock the camera's
+    /// bubble intervals and the render share. Nil outside a take.
+    var recordingClock: TimeInterval? {
+        guard let startedAt else { return nil }
+        let pauseDuration = if state == .paused, let pausedAt {
+            accumulatedPauseDuration + Date().timeIntervalSince(pausedAt)
+        } else {
+            accumulatedPauseDuration
+        }
+        return max(0, Date().timeIntervalSince(startedAt) - pauseDuration)
+    }
+
     private func updateElapsedTime() {
         guard let startedAt else {
             elapsedTime = 0
@@ -687,7 +884,14 @@ final class ScreenRecordingManager {
         pointerActivityRecorder.stop()
         keystrokeRecorder.stop()
         TeleprompterController.shared.endRecordingSession()
+        RecordingPausedToast.shared.hide()
+        CameraBubblePanel.shared.isPaused = false
+        PenOverlayController.shared.end()
+        ClaudeCodeRecorder.shared.end()
         endActivity()
+        if finishAction != .restart {
+            RecordingWallpaper.restore()
+        }
         session = nil
         displayID = nil
         currentSource = nil
@@ -696,7 +900,10 @@ final class ScreenRecordingManager {
         accumulatedPauseDuration = 0
         finishAction = .preview
         isStopping = false
+        sourceIntent = .screen
+        isMicMuted = false
         state = .idle
+        HotkeyManager.shared.unregisterSessionHotkeys()
     }
 
     private static func captureTarget(
@@ -718,15 +925,31 @@ final class ScreenRecordingManager {
             filter = ScreenRecordingCapture.displayFilter(
                 display: freshDisplay,
                 content: content,
-                includesAppWindows: includesAppWindows
+                includesAppWindows: includesAppWindows,
+                hidesDock: options.hidesMenuBarAndDock
             )
-            sourceSize = CGSize(width: freshDisplay.width, height: freshDisplay.height)
-            // Input mapping rects are always Quartz top-left, the space
-            // SCDisplay.frame, SCWindow.frame, and CGEvent locations already
-            // share. Only the area selection, which arrives from AppKit, is
-            // converted - and exactly once, here rather than at normalization.
-            let bounds = CGDisplayBounds(freshDisplay.displayID)
-            captureRect = bounds.isEmpty ? freshDisplay.frame : bounds
+            let screen = ActiveDisplayResolver.screen(for: freshDisplay.displayID)
+            if options.hidesMenuBarAndDock, let screen, screen.visibleFrame.maxY < screen.frame.maxY {
+                // The menu bar is drawn by the system, so no filter takes it
+                // out; the top strip is cropped off instead.
+                let crop = menuBarCropRect(frame: screen.frame, visibleFrame: screen.visibleFrame)
+                let mappedSourceRect = Self.sourceRect(
+                    forAppKitSelectionRect: crop,
+                    screenFrame: screen.frame,
+                    contentRect: filter.contentRect
+                )
+                sourceRect = mappedSourceRect
+                sourceSize = mappedSourceRect.size
+                captureRect = Self.quartzRect(fromAppKitRect: crop)
+            } else {
+                sourceSize = CGSize(width: freshDisplay.width, height: freshDisplay.height)
+                // Input mapping rects are always Quartz top-left, the space
+                // SCDisplay.frame, SCWindow.frame, and CGEvent locations already
+                // share. Only the area selection, which arrives from AppKit, is
+                // converted - and exactly once, here rather than at normalization.
+                let bounds = CGDisplayBounds(freshDisplay.displayID)
+                captureRect = bounds.isEmpty ? freshDisplay.frame : bounds
+            }
             displayID = freshDisplay.displayID
             tracksDynamicGeometry = false
         case .window(let window):
@@ -744,7 +967,8 @@ final class ScreenRecordingManager {
             filter = ScreenRecordingCapture.displayFilter(
                 display: freshDisplay,
                 content: content,
-                includesAppWindows: includesAppWindows
+                includesAppWindows: includesAppWindows,
+                hidesDock: options.hidesMenuBarAndDock
             )
             let mappedSourceRect = Self.sourceRect(
                 forAppKitSelectionRect: rect,
@@ -906,21 +1130,30 @@ nonisolated final class ScreenRecordingCapture: NSObject, SCStreamOutput, SCStre
         try await stream.stopCapture()
     }
 
+    /// ponytail: windows at menu-bar level from other apps (status items'
+    /// popovers) stay in; a window-list filter is a snapshot and would miss
+    /// windows opened after the stream starts.
     static func displayFilter(
         display: SCDisplay,
         content: SCShareableContent,
-        includesAppWindows: Bool
+        includesAppWindows: Bool,
+        hidesDock: Bool = false
     ) -> SCContentFilter {
-        let excludedApps = includesAppWindows
-            ? []
-            : content.applications.filter { application in
-                application.bundleIdentifier == Bundle.main.bundleIdentifier
-            }
+        let dock = "com.apple.dock"
+        let excludedApps = content.applications.filter { application in
+            (!includesAppWindows && application.bundleIdentifier == Bundle.main.bundleIdentifier)
+                || (hidesDock && application.bundleIdentifier == dock)
+        }
+        // The Dock process also draws the desktop picture, below every
+        // normal window; those stay in so the background isn't black.
+        let desktopWindows = hidesDock
+            ? content.windows.filter { $0.owningApplication?.bundleIdentifier == dock && $0.windowLayer < 0 }
+            : []
 
         return SCContentFilter(
             display: display,
             excludingApplications: excludedApps,
-            exceptingWindows: []
+            exceptingWindows: desktopWindows
         )
     }
 
@@ -1022,6 +1255,7 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
     private var isSessionStarted = false
     private var sessionStartTime: CMTime?
     private var isPaused = false
+    private var isMicrophoneMuted = false
     private var pauseStartTime: CMTime?
     private var totalPauseDuration: CMTime = .zero
     private var latestAdjustedTime: CMTime = .zero
@@ -1100,6 +1334,7 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
             isSessionStarted = false
             sessionStartTime = nil
             isPaused = false
+            isMicrophoneMuted = false
             pauseStartTime = nil
             totalPauseDuration = .zero
             latestAdjustedTime = .zero
@@ -1134,6 +1369,10 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
             isPaused = false
             needsPauseDurationUpdate = true
         }
+    }
+
+    func setMicrophoneMuted(_ muted: Bool) {
+        writingQueue.async { [weak self] in self?.isMicrophoneMuted = muted }
     }
 
     func writeVideoSample(_ sampleBuffer: CMSampleBuffer) {
@@ -1190,7 +1429,8 @@ nonisolated private final class ScreenRecordingWriter: @unchecked Sendable {
                     input = self.microphoneInput
                 }
                 // Audio before the first video frame has no timeline home yet.
-                guard let input, self.isSessionStarted, !self.isPaused else { return }
+                guard let input, self.isSessionStarted, !self.isPaused,
+                      !(kind == .microphone && self.isMicrophoneMuted) else { return }
 
                 let sampleBuffer = sendableSampleBuffer.sampleBuffer
                 let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)

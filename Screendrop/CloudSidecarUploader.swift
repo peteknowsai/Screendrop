@@ -44,32 +44,36 @@ nonisolated enum CloudSidecarUploader {
         sessionDirectory: URL?,
         createdAt: Date,
         customTitle: String? = nil,
+        keepsTitle: Bool = false,
+        isCurrent: @MainActor @Sendable () -> Bool = { true },
+        movieURL: URL? = nil,
         creds: CloudCredentials
     ) async {
+        // `uploadedFileURL` says which cut went up; `movieURL`, a hard link
+        // to it, is what's read, since Studio may drop that render meanwhile.
+        let movie = movieURL ?? uploadedFileURL
         var fields: [(name: String, value: String)] = []
         var files: [(name: String, filename: String, contentType: String, data: Data)] = []
 
         let trimmedCustomTitle = customTitle?.trimmingCharacters(in: .whitespacesAndNewlines)
-        fields.append(("title", trimmedCustomTitle?.isEmpty == false ? trimmedCustomTitle! : defaultTitle(for: createdAt)))
+        if let trimmedCustomTitle, !trimmedCustomTitle.isEmpty {
+            fields.append(("title", trimmedCustomTitle))
+        } else if !keepsTitle {
+            fields.append(("title", defaultTitle(for: createdAt)))
+        }
 
-        if let poster = await posterFrame(for: uploadedFileURL) {
+        if let poster = await posterFrame(for: movie) {
             files.append(("poster", "poster.jpg", "image/jpeg", poster))
         }
 
-        if let storyboard = await storyboard(for: uploadedFileURL) {
+        if let storyboard = await storyboard(for: movie) {
             files.append(("storyboard", "storyboard.jpg", "image/jpeg", storyboard.imageData))
             fields.append(("storyboard_meta", storyboard.metaJSON))
         }
 
-        if let sessionDirectory,
-           let transcript = transcriptPayload(
-               sessionDirectory: sessionDirectory,
-               uploadedFileURL: uploadedFileURL
-           ),
-           let encoded = try? JSONEncoder().encode(transcript) {
-            fields.append(("transcript", String(decoding: encoded, as: UTF8.self)))
-        }
-
+        // Title, poster and storyboard go first: they're quick, and the
+        // share page wants them before a transcription pass could finish.
+        guard await isCurrent() else { return }
         do {
             try await postAssets(
                 uploadID: uploadID,
@@ -79,6 +83,93 @@ nonisolated enum CloudSidecarUploader {
             )
         } catch {
             print("Sidecar upload failed for \(uploadID): \(error)")
+        }
+
+        if let sessionDirectory,
+           let transcript = await transcriptPayload(
+               sessionDirectory: sessionDirectory,
+               uploadedFileURL: uploadedFileURL
+           ),
+           let encoded = try? JSONEncoder().encode(transcript) {
+            guard await isCurrent() else { return }
+            do {
+                try await postAssets(
+                    uploadID: uploadID,
+                    fields: [("transcript", String(decoding: encoded, as: UTF8.self))],
+                    files: [],
+                    creds: creds
+                )
+            } catch {
+                print("Transcript upload failed for \(uploadID): \(error)")
+            }
+        }
+
+        // A take for Claude Code: its log, on the uploaded video's clock.
+        // Read from the session, so a Studio update sends it again.
+        var log: ClaudeCodeLog?
+        if let sessionDirectory {
+            log = claudeLog(sessionDirectory: sessionDirectory, uploadedFileURL: uploadedFileURL)
+            if let log, let encoded = try? JSONEncoder().encode(log) {
+                guard await isCurrent() else { return }
+                do {
+                    try await postAssets(
+                        uploadID: uploadID,
+                        fields: [("events", String(decoding: encoded, as: UTF8.self))],
+                        files: [],
+                        creds: creds
+                    )
+                } catch {
+                    print("Claude Code log upload failed for \(uploadID): \(error)")
+                }
+            }
+        }
+
+        // Stills for Claude Code's get_frames, one at each logged click.
+        if let log {
+            await CloudFrameUploader.upload(
+                id: uploadID,
+                movie: movie,
+                clicks: log.clicks.map(\.t),
+                clickNumbers: log.clicks.map(\.n),
+                isCurrent: isCurrent,
+                creds: creds
+            )
+        } else {
+            await CloudFrameUploader.upload(
+                id: uploadID,
+                movie: movie,
+                clicks: sessionDirectory.map { clickTimes(sessionDirectory: $0, uploadedFileURL: uploadedFileURL) } ?? [],
+                isCurrent: isCurrent,
+                creds: creds
+            )
+        }
+    }
+
+    /// The session's Claude Code log, remapped through the clip timeline
+    /// when the final cut is what went up.
+    private static func claudeLog(sessionDirectory: URL, uploadedFileURL: URL) -> ClaudeCodeLog? {
+        let session = RecordingSession(directoryURL: sessionDirectory)
+        guard let log = session.loadClaudeLog() else { return nil }
+        guard uploadedFileURL.standardizedFileURL == session.finalURL.standardizedFileURL,
+              let clips = session.effectiveEditDocument()?.clips, !clips.isEmpty else { return log }
+        let timeline = RecordingClipTimeline(segments: clips)
+        return log.remapped { timeline.editorTime(forSourceTime: $0) }
+    }
+
+    /// A screenshot's recognized text, so search and Claude Code can find it.
+    static func uploadSearchText(uploadID: String, text: String, creds: CloudCredentials) async {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            // The worker takes up to 200 KB; 50k characters fit however wide.
+            try await postAssets(
+                uploadID: uploadID,
+                fields: [("search_text", String(trimmed.prefix(50_000)))],
+                files: [],
+                creds: creds
+            )
+        } catch {
+            print("Search text upload failed for \(uploadID): \(error)")
         }
     }
 
@@ -239,16 +330,23 @@ nonisolated enum CloudSidecarUploader {
     private static func transcriptPayload(
         sessionDirectory: URL,
         uploadedFileURL: URL
-    ) -> CloudTranscriptPayload? {
+    ) async -> CloudTranscriptPayload? {
         let session = RecordingSession(directoryURL: sessionDirectory)
         // The upload was rendered from what the editor currently shows, so
         // the transcript has to come from the same document - the draft when
         // there is one, not the last saved state.
-        guard let document = session.effectiveEditDocument(),
-              let cues = document.subtitleCues, !cues.isEmpty else {
-            return nil
+        let document = session.effectiveEditDocument()
+        var cues = document?.subtitleCues ?? []
+        var words = document?.subtitleWords
+        if cues.isEmpty {
+            // No captions made in Studio: transcribe the screen master, the
+            // movie the source timeline belongs to. No narration, no transcript.
+            guard let transcript = try? await RecordingTranscriptionService.transcribe(
+                screenMovieURL: session.screenURL
+            ), !transcript.cues.isEmpty else { return nil }
+            cues = transcript.cues
+            words = transcript.words
         }
-        let words = document.subtitleWords
 
         // The raw screen movie shares the transcript's source timeline;
         // only the exported cut needs its times remapped through the
@@ -262,7 +360,13 @@ nonisolated enum CloudSidecarUploader {
             )
         }
 
-        guard let clips = document.clips, !clips.isEmpty else { return nil }
+        // No clips means no cuts: the final cut runs on the source's clock.
+        guard let clips = document?.clips, !clips.isEmpty else {
+            return CloudTranscriptPayload(
+                cues: cues.map { .init(start: $0.start, end: $0.end, text: $0.text) },
+                words: words?.map { .init(text: $0.text, start: $0.start, end: $0.end) }
+            )
+        }
         let timeline = RecordingClipTimeline(segments: clips)
 
         let mappedCues = cues.compactMap { cue -> CloudTranscriptPayload.Cue? in
@@ -281,6 +385,17 @@ nonisolated enum CloudSidecarUploader {
         }
 
         return CloudTranscriptPayload(cues: mappedCues, words: mappedWords)
+    }
+
+    /// Click times on the uploaded video's clock: the source's for the raw
+    /// screen movie, through the clip timeline for the final cut.
+    private static func clickTimes(sessionDirectory: URL, uploadedFileURL: URL) -> [Double] {
+        let session = RecordingSession(directoryURL: sessionDirectory)
+        let downs = session.loadPointerCapture()?.presses.filter { $0.phase == .down }.map(\.time) ?? []
+        guard uploadedFileURL.standardizedFileURL == session.finalURL.standardizedFileURL,
+              let clips = session.effectiveEditDocument()?.clips, !clips.isEmpty else { return downs }
+        let timeline = RecordingClipTimeline(segments: clips)
+        return downs.compactMap { timeline.editorTime(forSourceTime: $0) }
     }
 
     /// Source range → surviving editor range; nil when fully cut out.
@@ -305,13 +420,23 @@ nonisolated enum CloudSidecarUploader {
         files: [(name: String, filename: String, contentType: String, data: Data)],
         creds: CloudCredentials
     ) async throws {
+        try await postForm(path: "/api/assets/\(uploadID)", fields: fields, files: files, creds: creds)
+    }
+
+    /// A multipart form to the worker with the upload token; any 200 is success.
+    static func postForm(
+        path: String,
+        fields: [(name: String, value: String)],
+        files: [(name: String, filename: String, contentType: String, data: Data)],
+        creds: CloudCredentials
+    ) async throws {
         guard !fields.isEmpty || !files.isEmpty else { return }
 
         let workerBase = creds.workerURL
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         let base = workerBase.lowercased().hasPrefix("http") ? workerBase : "https://\(workerBase)"
-        guard let url = URL(string: "\(base)/api/assets/\(uploadID)") else {
+        guard let url = URL(string: "\(base)\(path)") else {
             throw CloudUploadError.invalidURL
         }
 

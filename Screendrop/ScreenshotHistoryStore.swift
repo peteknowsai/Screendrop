@@ -404,7 +404,12 @@ final class ScreenshotHistoryStore {
 
     func setCloudURL(for fileURL: URL, cloudURL: String) {
         let standardized = fileURL.standardizedFileURL
-        guard let index = items.firstIndex(where: { $0.url.standardizedFileURL == standardized }) else {
+        // A recording uploads a file from inside its session, not the
+        // history item's own URL.
+        let sessionPath = fileURL.deletingLastPathComponent().standardizedFileURL.path
+        guard let index = items.firstIndex(where: {
+            $0.url.standardizedFileURL == standardized || $0.recordingSessionPath == sessionPath
+        }) else {
             return
         }
         items[index].cloudURL = cloudURL

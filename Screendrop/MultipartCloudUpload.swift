@@ -50,9 +50,16 @@ nonisolated enum MultipartCloudUpload {
         do {
             session = try JSONDecoder().decode(Session.self, from: await send(start).0)
         } catch UploadError.rejected(let status) where status == 404 || status == 405 {
+            // With X-Upload-Id a 404 is the link deleted on the web, which
+            // Studio answers with a new link; without it, an old worker.
+            if status == 404, template.value(forHTTPHeaderField: "X-Upload-Id") != nil {
+                throw CloudUploadError.serverError(404, "Upload not found")
+            }
             throw UploadError.workerNeedsUpdate
         }
         var request = template
+        // The worker moves the link's progress bar from the parts.
+        request.setValue(String(size), forHTTPHeaderField: "X-Size-Total")
         request.url = start.url!.appendingPathComponent(session.id)
         var query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
         query.queryItems = [
